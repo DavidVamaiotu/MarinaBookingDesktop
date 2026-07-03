@@ -223,7 +223,7 @@ function renderTimeline({ preserveScroll = true } = {}) {
 }
 
 function renderCommands() {
-  const commandHtml = (command, compact = false) => `<div class="command"><div><strong>${escapeHtml(command.type)}</strong> <span>${escapeHtml(command.status)}</span></div><small>${new Date(command.updatedAt).toLocaleString()}</small>${command.errorMessage ? `<div class="error">${escapeHtml(command.errorMessage)}</div>` : ""}${!compact && ["failed", "conflict", "needs_attention"].includes(command.status) ? `<button class="secondary compact" data-retry-command="${command.id}" type="button">Retry</button>${command.bookingLocalId ? `<button class="secondary compact" data-revert-booking="${escapeHtml(command.bookingLocalId)}" type="button">Revert local</button>` : ""}` : ""}</div>`;
+  const commandHtml = (command, compact = false) => `<div class="command"><div><strong>${escapeHtml(command.type)}</strong> <span>${escapeHtml(command.status)}</span></div><small>${new Date(command.updatedAt).toLocaleString()}</small>${command.errorMessage ? `<div class="error">${escapeHtml(command.errorMessage)}</div>` : ""}${!compact && ["failed", "conflict", "needs_attention"].includes(command.status) ? `<button class="secondary compact" data-retry-command="${command.id}" type="button">Retry</button>${command.bookingLocalId ? `<button class="secondary compact" data-revert-booking="${escapeHtml(command.bookingLocalId)}" type="button">Revert local</button><button class="secondary compact" data-open-booking="${escapeHtml(command.bookingLocalId)}" type="button">Open details</button>` : ""}` : ""}</div>`;
   $("#commandList").innerHTML = state.commands.map((command) => commandHtml(command)).join("") || '<div class="availability">No commands yet.</div>';
   const info = state.diagnostics;
   $("#diagnosticSummary").textContent = `Online: ${info.online ? "yes" : "no"} · queued: ${info.queued || 0} · failed: ${info.failed || 0} · last sync: ${info.lastSuccessfulSync ? new Date(info.lastSuccessfulSync).toLocaleString() : "never"}`;
@@ -309,6 +309,9 @@ function populateDetails(booking, reset = true) {
   form.elements.name.value = booking.formData?.name?.value || "";
   form.elements.email.value = booking.formData?.email?.value || "";
   form.elements.phone.value = booking.formData?.phone?.value || "";
+  const extraFields = Object.entries(booking.formData || {}).filter(([name]) => !["name", "email", "phone"].includes(name));
+  $("#extraFieldsSection").hidden = extraFields.length === 0;
+  $("#extraFields").innerHTML = extraFields.map(([name, field]) => `<label>${escapeHtml(name)}<input data-extra-field="${escapeHtml(name)}" data-field-type="${escapeHtml(field.type || "text")}" value="${escapeHtml(field.value || "")}"></label>`).join("");
   form.elements.resourceId.value = booking.resourceId;
   form.elements.start.value = booking.dates[0];
   form.elements.end.value = booking.dates[booking.dates.length - 1];
@@ -408,6 +411,7 @@ $("#detailsForm").addEventListener("submit", async (event) => {
   if (!booking) return;
   const form = event.currentTarget;
   const formData = { ...booking.formData, name: { value: form.elements.name.value, type: "text" }, email: { value: form.elements.email.value, type: "email" }, phone: { value: form.elements.phone.value, type: "text" } };
+  for (const input of form.querySelectorAll("[data-extra-field]")) formData[input.dataset.extraField] = { value: input.value, type: input.dataset.fieldType || "text" };
   try {
     await window.marina.editBooking(booking.localId, { resourceId: Number(form.elements.resourceId.value), dates: rangeDates(form.elements.start.value, form.elements.end.value), formData });
     if (form.elements.note.value !== booking.note) await window.marina.setNote(booking.localId, { note: form.elements.note.value });
@@ -439,6 +443,11 @@ document.addEventListener("click", async (event) => {
   if (retry) { try { await window.marina.retryCommand(retry.dataset.retryCommand); } catch (error) { showError(error); } }
   const revert = event.target.closest("[data-revert-booking]");
   if (revert && confirm("Revert the unsynced local change to the last known server state?")) { try { await window.marina.revertBooking(revert.dataset.revertBooking); } catch (error) { showError(error); } }
+  const open = event.target.closest("[data-open-booking]");
+  if (open) {
+    const booking = bookingById(open.dataset.openBooking);
+    if (booking) { diagnostics.hidden = true; populateDetails(booking); }
+  }
 });
 
 $("#openSettings").addEventListener("click", async () => {
