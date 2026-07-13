@@ -16,7 +16,7 @@ for (const filename of ["index.html", "app.js", "styles.css"]) {
 for (const directory of ["assets", "fonts"]) {
   cpSync(path.join(root, directory), path.join(output, directory), { recursive: true });
 }
-for (const filename of ["booking-fields.js", "pricing-note.js", "timeline-adapter.js", "booking-calendar.js"]) {
+for (const filename of ["booking-fields.js", "pricing-note.js", "timeline-adapter.js", "booking-calendar.js", "camera-transform.js"]) {
   cpSync(path.join(root, "src", "shared", filename), path.join(output, "src", "shared", filename));
 }
 

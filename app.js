@@ -1,6 +1,8 @@
 "use strict";
 
 const $ = (selector) => document.querySelector(selector);
+const cameraViewport = $("#cameraViewport");
+const cameraContent = $("#cameraContent");
 const timelineShell = $("#timelineShell");
 const timelineScale = $("#timelineScale");
 const guestTimeline = $("#guestTimeline");
@@ -19,9 +21,10 @@ const MIN_DAY_WIDTH = 24;
 const MAX_DAY_WIDTH = 54;
 const MIN_ZOOM_DAY_WIDTH = 18;
 const MAX_ZOOM_DAY_WIDTH = 96;
-const MIN_DISPLAY_MAGNIFICATION = 1;
-const MAX_DISPLAY_MAGNIFICATION = 2;
+const MIN_CAMERA_SCALE = 1;
+const MAX_CAMERA_SCALE = 2;
 const PINCH_DIRECTION_THRESHOLD = 8;
+const CAMERA_PAN_THRESHOLD = 4;
 const ROW_BASE = 44;
 const LANE_HEIGHT = 34;
 const ROW_GAP = 1;
@@ -107,9 +110,17 @@ let manualDayWidth = null;
 let touchZoomState = null;
 let timelineZoomFrame = null;
 let pendingTimelineZoom = null;
-let displayMagnification = 1;
-let displayMagnificationFrame = null;
-let pendingDisplayMagnification = null;
+let cameraScale = 1;
+let cameraOffsetX = 0;
+let cameraOffsetY = 0;
+let pinchStartScale = 1;
+let pinchStartOffsetX = 0;
+let pinchStartOffsetY = 0;
+let pinchFocalPoint = null;
+let cameraTransformFrame = null;
+let pendingCameraState = null;
+let cameraPanState = null;
+let lastCameraPanEndedAt = 0;
 let wheelPinchState = null;
 let timelineRows = [];
 let rowRenderFrame = null;
@@ -186,8 +197,17 @@ function escapeHtml(value) { return String(value ?? "").replace(/[&<>'"]/g, (cha
 
 const DISPLAY_STATUS = { approved: "aprobată", pending: "în așteptare", synced: "sincronizat", queued: "în coadă", sending: "se trimite", failed: "eșuată", conflict: "conflict", needs_attention: "necesită atenție", cancelled: "anulată" };
 const DISPLAY_COMMAND = { create: "creare", edit: "editare", status: "status", note: "notă", trash: "gunoi", deposit_update: "actualizare avans", payment_request: "email de plată" };
+const QUEUE_ISSUE_STATUSES = new Set(["failed", "conflict", "needs_attention"]);
+const dismissedQueueIssueTokens = new Map();
 function displayStatus(value) { return DISPLAY_STATUS[value] || value; }
 function displayCommand(value) { return DISPLAY_COMMAND[value] || value; }
+
+function queueIssueToken(command) { return `${command.id}:${command.updatedAt || ""}`; }
+function dismissedQueueIssues() {
+  const key = `${window.marina.platform}:${activeWorkspace}`;
+  if (!dismissedQueueIssueTokens.has(key)) dismissedQueueIssueTokens.set(key, new Set());
+  return dismissedQueueIssueTokens.get(key);
+}
 
 const CALENDAR_WEEKDAYS = ["LU", "MA", "MI", "JO", "VI", "SÂ", "DU"];
 
@@ -251,7 +271,7 @@ function setTimelineZoom(nextWidth, clientX, anchorDay = null) {
   if (!Number.isFinite(next)) return;
   const rect = timelineShell.getBoundingClientRect();
   const unitWidth = timelineUnitWidth();
-  const viewportX = Math.min(rect.width / displayMagnification, Math.max(unitWidth, (clientX - rect.left) / displayMagnification));
+  const viewportX = Math.min(rect.width / cameraScale, Math.max(unitWidth, (clientX - rect.left) / cameraScale));
   const dayAtAnchor = anchorDay ?? (timelineScrollLeft() + viewportX - unitWidth) / dayWidth;
   manualDayWidth = next;
   dayWidth = next;
@@ -298,93 +318,180 @@ function touchAxisDistance(touches, axis) {
   return Math.abs(touches[1][axis] - touches[0][axis]);
 }
 
-function displayAnchorAt(clientX, clientY) {
+function cameraDimensions() {
   return {
-    x: (window.scrollX + clientX) / displayMagnification,
-    y: (window.scrollY + clientY) / displayMagnification
+    contentWidth: cameraContent.offsetWidth,
+    contentHeight: cameraContent.offsetHeight,
+    viewportWidth: cameraViewport.clientWidth,
+    viewportHeight: cameraViewport.clientHeight
   };
 }
 
-function setDisplayMagnification(nextMagnification, clientX, clientY, anchor) {
-  const next = Math.min(MAX_DISPLAY_MAGNIFICATION, Math.max(MIN_DISPLAY_MAGNIFICATION, nextMagnification));
-  if (!Number.isFinite(next) || next === displayMagnification) return;
-  displayMagnification = next;
-  document.documentElement.style.setProperty("--display-magnification", String(displayMagnification));
-  window.scrollTo(
-    Math.max(0, anchor.x * displayMagnification - clientX),
-    Math.max(0, anchor.y * displayMagnification - clientY)
-  );
+function screenToCameraViewport(clientX, clientY) {
+  const rect = cameraViewport.getBoundingClientRect();
+  return { x: clientX - rect.left, y: clientY - rect.top };
 }
 
-function queueDisplayMagnification(nextMagnification, clientX, clientY, anchor) {
-  pendingDisplayMagnification = { nextMagnification, clientX, clientY, anchor };
-  if (displayMagnificationFrame) return;
-  displayMagnificationFrame = requestAnimationFrame(() => {
-    displayMagnificationFrame = null;
-    const pending = pendingDisplayMagnification;
-    pendingDisplayMagnification = null;
-    if (pending) setDisplayMagnification(pending.nextMagnification, pending.clientX, pending.clientY, pending.anchor);
+function screenToCameraContent(clientX, clientY, state = currentCameraState()) {
+  const focal = screenToCameraViewport(clientX, clientY);
+  return CameraTransform.viewportToContent({
+    x: focal.x,
+    y: focal.y,
+    scale: state.scale,
+    offsetX: state.offsetX,
+    offsetY: state.offsetY
   });
 }
 
-function finishDisplayMagnification() {
-  if (displayMagnificationFrame) cancelAnimationFrame(displayMagnificationFrame);
-  displayMagnificationFrame = null;
-  const pending = pendingDisplayMagnification;
-  pendingDisplayMagnification = null;
-  if (pending) setDisplayMagnification(pending.nextMagnification, pending.clientX, pending.clientY, pending.anchor);
+function currentCameraState() {
+  return pendingCameraState || { scale: cameraScale, offsetX: cameraOffsetX, offsetY: cameraOffsetY };
+}
+
+function clampCameraState(scale, offsetX, offsetY) {
+  const dimensions = cameraDimensions();
+  if (!dimensions.contentWidth || !dimensions.contentHeight || !dimensions.viewportWidth || !dimensions.viewportHeight) {
+    return { scale, offsetX, offsetY };
+  }
+  return CameraTransform.clampState({ scale, offsetX, offsetY, ...dimensions });
+}
+
+function setCameraState(nextState) {
+  const nextScale = Math.min(MAX_CAMERA_SCALE, Math.max(MIN_CAMERA_SCALE, Number(nextState.scale)));
+  if (!Number.isFinite(nextScale)) return;
+  const next = clampCameraState(nextScale, Number(nextState.offsetX) || 0, Number(nextState.offsetY) || 0);
+  cameraScale = next.scale;
+  cameraOffsetX = next.offsetX;
+  cameraOffsetY = next.offsetY;
+  cameraContent.style.transform = `translate3d(${cameraOffsetX}px, ${cameraOffsetY}px, 0) scale(${cameraScale})`;
+}
+
+function queueCameraState(nextState) {
+  pendingCameraState = nextState;
+  if (cameraTransformFrame) return;
+  cameraTransformFrame = requestAnimationFrame(() => {
+    cameraTransformFrame = null;
+    const pending = pendingCameraState;
+    pendingCameraState = null;
+    if (pending) setCameraState(pending);
+  });
+}
+
+function finishCameraTransform() {
+  if (cameraTransformFrame) cancelAnimationFrame(cameraTransformFrame);
+  cameraTransformFrame = null;
+  const pending = pendingCameraState;
+  pendingCameraState = null;
+  if (pending) setCameraState(pending);
+}
+
+function cameraStateForContentAtFocal(contentPoint, focalPoint, nextScale) {
+  return CameraTransform.placeContentAtFocal({
+    contentX: contentPoint.x,
+    contentY: contentPoint.y,
+    focalX: focalPoint.x,
+    focalY: focalPoint.y,
+    scale: Math.min(MAX_CAMERA_SCALE, Math.max(MIN_CAMERA_SCALE, nextScale)),
+    ...cameraDimensions()
+  });
+}
+
+function zoomCameraAt(clientX, clientY, nextScale) {
+  const focal = screenToCameraViewport(clientX, clientY);
+  const current = currentCameraState();
+  const contentPoint = screenToCameraContent(clientX, clientY, current);
+  return cameraStateForContentAtFocal(contentPoint, focal, nextScale);
 }
 
 function beginTouchZoom(event) {
+  if (event.touches.length === 1) {
+    if (cameraScale <= 1) return;
+    cameraPanState = {
+      clientX: event.touches[0].clientX,
+      clientY: event.touches[0].clientY,
+      startOffsetX: cameraOffsetX,
+      startOffsetY: cameraOffsetY,
+      moved: false
+    };
+    return;
+  }
   if (event.touches.length !== 2) return;
   cancelDrag();
+  cameraPanState = null;
   event.preventDefault();
   const midpointX = touchMidpointX(event.touches);
   const midpointY = touchMidpointY(event.touches);
+  pinchStartScale = cameraScale;
+  pinchStartOffsetX = cameraOffsetX;
+  pinchStartOffsetY = cameraOffsetY;
+  pinchFocalPoint = screenToCameraViewport(midpointX, midpointY);
+  const pinchContentPoint = CameraTransform.viewportToContent({
+    x: pinchFocalPoint.x,
+    y: pinchFocalPoint.y,
+    scale: pinchStartScale,
+    offsetX: pinchStartOffsetX,
+    offsetY: pinchStartOffsetY
+  });
   const rect = timelineShell.getBoundingClientRect();
   const unitWidth = timelineUnitWidth();
-  const viewportX = Math.min(rect.width / displayMagnification, Math.max(unitWidth, (midpointX - rect.left) / displayMagnification));
+  const viewportX = Math.min(rect.width / cameraScale, Math.max(unitWidth, (midpointX - rect.left) / cameraScale));
   touchZoomState = {
     mode: null,
     startDistance: Math.max(1, touchDistance(event.touches)),
     startHorizontalDistance: touchAxisDistance(event.touches, "clientX"),
     startVerticalDistance: touchAxisDistance(event.touches, "clientY"),
     startDayWidth: dayWidth,
-    startDisplayMagnification: displayMagnification,
     anchorDay: (timelineScrollLeft() + viewportX - unitWidth) / dayWidth,
-    displayAnchor: displayAnchorAt(midpointX, midpointY)
+    pinchContentPoint
   };
 }
 
 function moveTouchZoom(event) {
+  if (event.touches.length === 1 && cameraPanState) {
+    const deltaX = event.touches[0].clientX - cameraPanState.clientX;
+    const deltaY = event.touches[0].clientY - cameraPanState.clientY;
+    if (!cameraPanState.moved && Math.max(Math.abs(deltaX), Math.abs(deltaY)) < CAMERA_PAN_THRESHOLD) return;
+    cameraPanState.moved = true;
+    event.preventDefault();
+    queueCameraState({
+      scale: cameraScale,
+      offsetX: cameraPanState.startOffsetX + deltaX,
+      offsetY: cameraPanState.startOffsetY + deltaY
+    });
+    return;
+  }
   if (!touchZoomState || event.touches.length < 2) return;
   event.preventDefault();
   if (!touchZoomState.mode) {
     const horizontalChange = Math.abs(touchAxisDistance(event.touches, "clientX") - touchZoomState.startHorizontalDistance);
     const verticalChange = Math.abs(touchAxisDistance(event.touches, "clientY") - touchZoomState.startVerticalDistance);
     if (Math.max(horizontalChange, verticalChange) < PINCH_DIRECTION_THRESHOLD) return;
-    touchZoomState.mode = horizontalChange >= verticalChange ? "horizontal" : "vertical";
+    const isHorizontal = horizontalChange >= verticalChange;
+    touchZoomState.mode = isHorizontal ? "horizontal" : "vertical";
   }
   const scale = touchDistance(event.touches) / touchZoomState.startDistance;
   if (touchZoomState.mode === "horizontal") {
     queueTimelineZoom(touchZoomState.startDayWidth * scale, touchMidpointX(event.touches), touchZoomState.anchorDay);
-  } else {
-    queueDisplayMagnification(
-      touchZoomState.startDisplayMagnification * scale,
-      touchMidpointX(event.touches),
-      touchMidpointY(event.touches),
-      touchZoomState.displayAnchor
-    );
+  } else if (touchZoomState.mode === "vertical") {
+    const focal = screenToCameraViewport(touchMidpointX(event.touches), touchMidpointY(event.touches));
+    queueCameraState(cameraStateForContentAtFocal(touchZoomState.pinchContentPoint, focal, pinchStartScale * scale));
   }
 }
 
 function endTouchZoom(event) {
-  if (!touchZoomState || event.touches.length >= 2) return;
-  if (touchZoomState.mode === "horizontal") finishTimelineZoom();
-  else if (touchZoomState.mode === "vertical") finishDisplayMagnification();
-  touchZoomState = null;
-  lastScrollLeft = timelineShell.scrollLeft;
-  updateVisibleMonthFromScroll();
+  if (event.touches.length >= 2) return;
+  if (touchZoomState) {
+    if (touchZoomState.mode === "horizontal") finishTimelineZoom();
+    else if (touchZoomState.mode === "vertical") finishCameraTransform();
+    touchZoomState = null;
+    pinchFocalPoint = null;
+    lastScrollLeft = timelineShell.scrollLeft;
+    updateVisibleMonthFromScroll();
+  }
+  if (cameraPanState && event.touches.length === 0) {
+    finishCameraTransform();
+    if (cameraPanState.moved) lastCameraPanEndedAt = performance.now();
+    cameraPanState = null;
+  }
 }
 
 function timelineScrollLeft() { return timelineShell.scrollLeft; }
@@ -673,7 +780,7 @@ function updateLabelShifts(row) {
     const previousBounds = bounds.get(bar.dataset.handoffPredecessorKey);
     const currentBounds = bounds.get(bar.dataset.bookingId);
     if (!predecessor || !previousBounds || !currentBounds || predecessor.style.gridRow !== bar.style.gridRow) continue;
-    const shift = Math.min(48, Math.max(12, Math.ceil((previousBounds.right - currentBounds.left) / displayMagnification + 6)));
+    const shift = Math.min(48, Math.max(12, Math.ceil((previousBounds.right - currentBounds.left) / cameraScale + 6)));
     bar.style.setProperty("--timeline-label-shift", `${shift}px`);
   }
 }
@@ -715,6 +822,10 @@ function renderTimeline({ preserveScroll = true } = {}) {
 }
 
 function renderCommands() {
+  const dismissed = dismissedQueueIssues();
+  const issues = state.commands.filter((command) => QUEUE_ISSUE_STATUSES.has(command.status));
+  const visibleCommands = state.commands.filter((command) => !QUEUE_ISSUE_STATUSES.has(command.status) || !dismissed.has(queueIssueToken(command)));
+  const visibleIssueCount = issues.filter((command) => !dismissed.has(queueIssueToken(command))).length;
   const commandHtml = (command, compact = false) => {
     const retryable = ["failed", "conflict", "needs_attention"].includes(command.status) && (window.marina.platform !== "android" || ["deposit_update", "payment_request"].includes(command.type));
     const bookingActions = command.bookingLocalId && window.marina.platform !== "android"
@@ -723,10 +834,11 @@ function renderCommands() {
         ? `<button class="secondary compact" data-revert-booking="${escapeHtml(command.bookingLocalId)}" type="button">Anulează și reîncarcă</button>` : "";
     return `<div class="command"><div><strong>${escapeHtml(displayCommand(command.type))}</strong> <span>${escapeHtml(displayStatus(command.status))}</span></div><small>${new Date(command.updatedAt).toLocaleString("ro-RO")}</small>${command.errorMessage ? `<div class="error">${escapeHtml(command.errorMessage)}</div>` : ""}${!compact && retryable ? `<button class="secondary compact" data-retry-command="${command.id}" type="button">Reîncearcă</button>${bookingActions}` : ""}</div>`;
   };
-  $("#commandList").innerHTML = state.commands.map((command) => commandHtml(command)).join("") || '<div class="availability">Nu există comenzi.</div>';
+  $("#commandList").innerHTML = visibleCommands.map((command) => commandHtml(command)).join("") || '<div class="availability">Nu există comenzi.</div>';
+  $("#clearQueueIssues").hidden = visibleIssueCount === 0;
   const info = state.diagnostics;
   const cache = info.cache?.loadedAt ? `${info.cache.startDate}–${info.cache.endDate}, verificat ${new Date(info.cache.loadedAt).toLocaleString("ro-RO")}` : "nu este încărcat";
-  $("#diagnosticSummary").textContent = `Conectare: ${info.online ? "da" : "nu"} · în coadă: ${info.queued || 0} · probleme: ${info.failed || 0} · ultima sincronizare: ${info.lastSuccessfulSync ? new Date(info.lastSuccessfulSync).toLocaleString("ro-RO") : "niciodată"} · cache: ${cache}`;
+  $("#diagnosticSummary").textContent = `Conectare: ${info.online ? "da" : "nu"} · în coadă: ${info.queued || 0} · probleme afișate: ${visibleIssueCount} · ultima sincronizare: ${info.lastSuccessfulSync ? new Date(info.lastSuccessfulSync).toLocaleString("ro-RO") : "niciodată"} · cache: ${cache}`;
   if (selectedBookingId && $("#bookingCommands")) $("#bookingCommands").innerHTML = state.commands.filter((command) => command.bookingLocalId === selectedBookingId).map((command) => commandHtml(command, true)).join("") || "Nu există comenzi locale.";
 }
 
@@ -1336,32 +1448,43 @@ function populateBookingMenu(booking) {
   `;
 }
 
-function positionBookingMenu(anchor) {
-  if (window.matchMedia("(max-width: 900px)").matches) {
-    bookingMenu.style.removeProperty("left");
-    bookingMenu.style.removeProperty("top");
-    return;
-  }
-  const margin = 10;
-  const rect = anchor.getBoundingClientRect();
-  const width = bookingMenu.offsetWidth || 342;
-  const height = bookingMenu.offsetHeight || 360;
-  const visualWidth = width * displayMagnification;
-  const visualHeight = height * displayMagnification;
-  const left = Math.min(window.innerWidth - visualWidth - margin, Math.max(margin, rect.left));
-  const below = rect.bottom + 7;
-  const top = below + visualHeight <= window.innerHeight - margin ? below : Math.max(margin, rect.top - visualHeight - 7);
-  bookingMenu.style.left = `${(left + window.scrollX) / displayMagnification}px`;
-  bookingMenu.style.top = `${(top + window.scrollY) / displayMagnification}px`;
+function prepareBookingMenuPosition() {
+  bookingMenu.style.position = "fixed";
+  bookingMenu.style.right = "auto";
+  bookingMenu.style.bottom = "auto";
+}
+
+function positionBookingMenu(anchorRect) {
+  prepareBookingMenuPosition();
+  const mobile = window.matchMedia("(max-width: 900px)").matches;
+  const margin = mobile ? 6 : 10;
+  const targetWidth = Math.min(mobile ? 320 : 342, window.innerWidth - margin * 2);
+  const targetMaxHeight = Math.min(mobile ? 440 : window.innerHeight - margin * 2, window.innerHeight - margin * 2);
+  bookingMenu.style.width = `${targetWidth}px`;
+  bookingMenu.style.maxHeight = `${targetMaxHeight}px`;
+  const width = bookingMenu.offsetWidth;
+  const height = bookingMenu.offsetHeight;
+  const left = Math.min(window.innerWidth - width - margin, Math.max(margin, anchorRect.left));
+  const below = anchorRect.bottom + 7;
+  const above = anchorRect.top - height - 7;
+  const top = below + height <= window.innerHeight - margin
+    ? below
+    : above >= margin
+      ? above
+      : Math.min(window.innerHeight - height - margin, Math.max(margin, anchorRect.top - height / 3));
+  bookingMenu.style.left = `${left}px`;
+  bookingMenu.style.top = `${top}px`;
 }
 
 function openBookingMenu(booking, anchor) {
   if (!booking) return;
+  const anchorRect = anchor.getBoundingClientRect();
   if (selectedBookingId !== booking.localId) void window.marina.clearQuoteCache();
   detailsPanel.hidden = true;
   populateBookingMenu(booking);
+  prepareBookingMenuPosition();
   bookingMenu.hidden = false;
-  positionBookingMenu(anchor);
+  positionBookingMenu(anchorRect);
 }
 
 function dismissBookingMenu() {
@@ -1504,7 +1627,7 @@ function renderPaymentSection(booking, reset = false) {
 
 function pointerDate(event) {
   const rect = timelineShell.getBoundingClientRect();
-  const x = (event.clientX - rect.left) / displayMagnification - timelineUnitWidth() + timelineScrollLeft();
+  const x = (event.clientX - rect.left) / cameraScale - timelineUnitWidth() + timelineScrollLeft();
   return addDays(windowStart, Math.max(0, Math.min(dayCount - 1, Math.floor(x / dayWidth))));
 }
 
@@ -1567,32 +1690,27 @@ function handleTimelineWheel(event) {
   if (event.ctrlKey) {
     cancelDrag();
     event.preventDefault();
-    if (!wheelPinchState) wheelPinchState = { mode: null, x: 0, y: 0, timer: null, displayAnchor: null };
+    if (!wheelPinchState) wheelPinchState = { mode: null, x: 0, y: 0, timer: null };
     wheelPinchState.x += event.deltaX;
     wheelPinchState.y += event.deltaY;
     clearTimeout(wheelPinchState.timer);
     wheelPinchState.timer = setTimeout(() => {
       if (wheelPinchState?.mode === "horizontal") finishTimelineZoom();
-      else if (wheelPinchState?.mode === "vertical") finishDisplayMagnification();
+      else if (wheelPinchState?.mode === "vertical") finishCameraTransform();
       wheelPinchState = null;
     }, 140);
     if (!wheelPinchState.mode) {
       if (Math.max(Math.abs(wheelPinchState.x), Math.abs(wheelPinchState.y)) < PINCH_DIRECTION_THRESHOLD) return;
-      wheelPinchState.mode = Math.abs(wheelPinchState.x) > Math.abs(wheelPinchState.y) ? "horizontal" : "vertical";
-      if (wheelPinchState.mode === "vertical") wheelPinchState.displayAnchor = displayAnchorAt(event.clientX, event.clientY);
+      const isHorizontal = Math.abs(wheelPinchState.x) > Math.abs(wheelPinchState.y);
+      wheelPinchState.mode = isHorizontal ? "horizontal" : "vertical";
     }
     if (wheelPinchState.mode === "horizontal") {
       const baseWidth = pendingTimelineZoom?.nextWidth ?? dayWidth;
       const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
       queueTimelineZoom(baseWidth * Math.exp(-delta * 0.01), event.clientX);
-    } else {
-      const baseMagnification = pendingDisplayMagnification?.nextMagnification ?? displayMagnification;
-      queueDisplayMagnification(
-        baseMagnification * Math.exp(-event.deltaY * 0.01),
-        event.clientX,
-        event.clientY,
-        wheelPinchState.displayAnchor
-      );
+    } else if (wheelPinchState.mode === "vertical") {
+      const current = currentCameraState();
+      queueCameraState(zoomCameraAt(event.clientX, event.clientY, current.scale * Math.exp(-event.deltaY * 0.01)));
     }
     return;
   }
@@ -1612,7 +1730,7 @@ function handleTimelineWheel(event) {
 
 function autoScrollDuringDrag(event) {
   const rect = timelineShell.getBoundingClientRect();
-  const edge = 72 * displayMagnification;
+  const edge = 72 * cameraScale;
   if (event.clientX > rect.right - edge) timelineShell.scrollLeft += dayWidth * 2;
   else if (event.clientX < rect.left + edge) timelineShell.scrollLeft -= dayWidth * 2;
   else return;
@@ -1654,7 +1772,7 @@ function updateDraggedBar() {
 function moveDrag(event) {
   if (!dragState || event.pointerId !== dragState.pointerId) return;
   autoScrollDuringDrag(event);
-  const delta = Math.round(((event.clientX - dragState.clientX) / displayMagnification + timelineScrollLeft() - dragState.scrollLeft) / dayWidth);
+  const delta = Math.round(((event.clientX - dragState.clientX) / cameraScale + timelineScrollLeft() - dragState.scrollLeft) / dayWidth);
   if (delta === dragState.lastDelta) return;
   let start = utcDate(dragState.originalDates[0]);
   let end = utcDate(dragState.originalDates[dragState.originalDates.length - 1]);
@@ -1715,17 +1833,17 @@ function cancelDrag() {
 }
 
 timelineShell.addEventListener("scroll", handleTimelineScroll, { passive: true });
-timelineShell.addEventListener("wheel", handleTimelineWheel, { passive: false });
-timelineShell.addEventListener("touchstart", beginTouchZoom, { passive: false });
-timelineShell.addEventListener("touchmove", moveTouchZoom, { passive: false });
-timelineShell.addEventListener("touchend", endTouchZoom, { passive: true });
-timelineShell.addEventListener("touchcancel", endTouchZoom, { passive: true });
+cameraViewport.addEventListener("wheel", handleTimelineWheel, { passive: false });
+cameraViewport.addEventListener("touchstart", beginTouchZoom, { passive: false });
+cameraViewport.addEventListener("touchmove", moveTouchZoom, { passive: false });
+cameraViewport.addEventListener("touchend", endTouchZoom, { passive: true });
+cameraViewport.addEventListener("touchcancel", endTouchZoom, { passive: true });
 guestTimeline.addEventListener("pointerdown", beginDrag);
 document.addEventListener("pointermove", moveDrag);
 document.addEventListener("pointerup", endDrag);
 document.addEventListener("pointercancel", cancelDrag);
 guestTimeline.addEventListener("click", (event) => {
-  if (dragState || performance.now() - lastDragEndedAt < 250) return;
+  if (dragState || performance.now() - lastDragEndedAt < 250 || performance.now() - lastCameraPanEndedAt < 250) return;
   const bar = event.target.closest(".timeline-bar");
   if (bar) openBookingMenu(bookingById(bar.dataset.bookingId), bar);
 });
@@ -1966,6 +2084,11 @@ $("#bookingMenuTrash").addEventListener("click", async () => {
 });
 
 $("#syncIndicator").addEventListener("click", () => { diagnostics.hidden = false; });
+$("#clearQueueIssues").addEventListener("click", () => {
+  const dismissed = dismissedQueueIssues();
+  for (const command of state.commands) if (QUEUE_ISSUE_STATUSES.has(command.status)) dismissed.add(queueIssueToken(command));
+  renderCommands();
+});
 document.addEventListener("click", async (event) => {
   if (!event.target.closest(".booking-payment-menu")) {
     $("#bookingPaymentMenu").hidden = true;
@@ -2087,6 +2210,8 @@ window.addEventListener("resize", () => {
     renderTimeline({ preserveScroll: false });
     setTimelineScrollLeft(scrollLeftForDate(anchor));
     lastScrollLeft = timelineShell.scrollLeft;
+    finishCameraTransform();
+    setCameraState({ scale: cameraScale, offsetX: cameraOffsetX, offsetY: cameraOffsetY });
   }, 120);
 });
 

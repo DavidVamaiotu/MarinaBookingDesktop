@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ro">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Queue issues preview</title>
+  <link rel="stylesheet" href="../../styles.css">
+</head>
+<body>
+  <aside class="diagnostics" id="diagnostics">
+    <header>
+      <div><p>Coada locală persistentă</p><h2>Diagnostic sincronizare</h2></div>
+      <div class="diagnostic-header-actions"><button class="secondary compact" id="clearQueueIssues" type="button">Șterge problemele</button><button class="icon" type="button" aria-label="Închide diagnosticul">×</button></div>
+    </header>
+    <div class="diagnostic-summary" id="diagnosticSummary">Conectare: da · în coadă: 1 · probleme afișate: 1 · ultima sincronizare: astăzi</div>
+    <div class="command-list" id="commandList">
+      <div class="command" data-issue><div><strong>email de plată</strong> <span>eșuată</span></div><small>13.07.2026, 12:00</small><div class="error">Mesajul nu a putut fi trimis.</div></div>
+      <div class="command"><div><strong>editare</strong> <span>în coadă</span></div><small>13.07.2026, 12:01</small></div>
+    </div>
+  </aside>
+  <script src="queue-issues-preview.js"></script>
+</body>
+</html>

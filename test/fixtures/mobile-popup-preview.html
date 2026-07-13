@@ -3,31 +3,178 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Mobile popup preview</title>
+  <title>Mobile camera and overlay preview</title>
   <link rel="stylesheet" href="../../styles.css">
+  <style>
+    body{min-width:0;background:#e7ece8}
+    .fixture-root{padding:8px}
+    .fixture-toolbar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:48px;padding:6px;background:#fff}
+    .fixture-toolbar button{padding:6px}
+    #cameraViewport{height:620px;min-height:0;max-height:none;border:2px solid #176c73}
+    .fixture-surface{position:relative;width:100%;height:100%;background:repeating-linear-gradient(0deg,#fff 0 39px,#dfe7e2 39px 40px),repeating-linear-gradient(90deg,transparent 0 59px,#dfe7e2 59px 60px)}
+    #clientAnchor{position:absolute;left:210px;top:330px;width:130px;height:38px}
+    #fixtureInput{position:absolute;left:25px;top:500px;width:180px}
+    #fixtureDialog{width:260px;height:auto;margin:auto;padding:18px}
+  </style>
 </head>
 <body>
-  <div style="--timeline-name-size:11px"><strong class="timeline-bar-guest" id="baseName">Client Test</strong></div>
-  <div style="--timeline-name-size:16px"><strong class="timeline-bar-guest" id="zoomName">Client Test Zoom</strong></div>
-  <aside class="booking-menu" id="bookingMenu">
-    <header><strong>ID: 123</strong><button class="booking-menu-close" type="button">×</button></header>
-    <div class="booking-menu-actions"><button type="button">Editează</button><button type="button">Aprobă</button><button type="button">Gunoi</button></div>
-    <div id="bookingMenuContent">
-      <div class="booking-menu-badges"><span class="booking-id-badge">123</span><span class="booking-status-badge approved">Aprobată</span><span class="booking-resource-badge">Camera 12</span></div>
-      <div class="booking-menu-facts">
-        <span><strong>Prenume:</strong>Client</span><span><strong>Nume:</strong>Exemplu</span>
-        <span class="wide"><strong>Email:</strong>client@example.test</span><span><strong>Telefon:</strong>0700000000</span>
-        <span><strong>Adulți:</strong>2</span><span><strong>Copii:</strong>1</span>
-        <span class="wide"><strong>Detalii:</strong><span id="customerDetails"></span></span>
+  <main class="fixture-root">
+    <header class="fixture-toolbar" id="unscaledHeader">
+      <button id="zoomFirst" type="button">Zoom 1.7×</button>
+      <button id="panCamera" type="button">Pan</button>
+      <button id="openPopup" type="button">Open popup</button>
+      <button id="openEdgePopup" type="button">Popup edges</button>
+      <button id="openModal" type="button">Open modal</button>
+      <button id="testCorners" type="button">Test corners</button>
+      <button id="resetCamera" type="button">Reset 1×</button>
+    </header>
+    <div class="timeline-camera-viewport" id="cameraViewport">
+      <div class="timeline-camera-content" id="cameraContent">
+        <div class="fixture-surface" id="fixtureSurface">
+          <button id="clientAnchor" type="button">Client Exemplu</button>
+          <input id="fixtureInput" value="Focus test">
+        </div>
       </div>
-      <div class="booking-menu-note"><strong>Notă:</strong>Conținut local sintetic fără date de producție.</div>
-      <div class="booking-menu-dates"><span>10 iulie 2026 <small>15:00</small></span><b>→</b><span>14 iulie 2026 <small>12:00</small></span></div>
     </div>
-  </aside>
-  <script src="../../src/shared/booking-fields.js"></script>
+  </main>
+
+  <div class="overlay-layer" id="overlayLayer">
+    <aside class="booking-menu" id="bookingMenu" hidden>
+      <header><strong>ID: 123</strong><button class="booking-menu-close" id="closePopup" type="button">×</button></header>
+      <div class="booking-menu-actions"><button type="button">Editează</button><button type="button">Aprobă</button><button type="button">Gunoi</button></div>
+      <div id="bookingMenuContent">
+        <div class="booking-menu-badges"><span class="booking-id-badge">123</span><span class="booking-status-badge approved">Aprobată</span></div>
+        <div class="booking-menu-note"><strong>Notă:</strong>Conținut sintetic.</div>
+      </div>
+    </aside>
+    <dialog id="fixtureDialog"><label>Detalii client<input id="dialogInput" value="Dialog sintetic"></label><button id="closeModal" type="button">Închide</button></dialog>
+  </div>
+
+  <script src="../../src/shared/camera-transform.js"></script>
   <script>
-    const syntheticBooking = { formData: { cerere_client7: { value: "Cameră liniștită", type: "textarea" } } };
-    customerDetails.textContent = BookingFields.detailsValue(syntheticBooking) || "—";
+    let cameraScale = 1;
+    let cameraOffsetX = 0;
+    let cameraOffsetY = 0;
+
+    function dimensions() {
+      return {
+        contentWidth: cameraContent.offsetWidth,
+        contentHeight: cameraContent.offsetHeight,
+        viewportWidth: cameraViewport.clientWidth,
+        viewportHeight: cameraViewport.clientHeight
+      };
+    }
+
+    function state() {
+      return { scale: cameraScale, offsetX: cameraOffsetX, offsetY: cameraOffsetY };
+    }
+
+    function applyCamera(next) {
+      const clamped = CameraTransform.clampState({ ...next, ...dimensions() });
+      cameraScale = clamped.scale;
+      cameraOffsetX = clamped.offsetX;
+      cameraOffsetY = clamped.offsetY;
+      cameraContent.style.transform = `translate3d(${cameraOffsetX}px, ${cameraOffsetY}px, 0) scale(${cameraScale})`;
+      return state();
+    }
+
+    function viewportPoint(clientX, clientY) {
+      const rect = cameraViewport.getBoundingClientRect();
+      return { x: clientX - rect.left, y: clientY - rect.top };
+    }
+
+    function contentPoint(clientX, clientY) {
+      const point = viewportPoint(clientX, clientY);
+      return CameraTransform.viewportToContent({ ...point, scale: cameraScale, offsetX: cameraOffsetX, offsetY: cameraOffsetY });
+    }
+
+    function zoomAt(clientX, clientY, newScale) {
+      const focal = viewportPoint(clientX, clientY);
+      const before = contentPoint(clientX, clientY);
+      const next = CameraTransform.zoomAt({ oldScale: cameraScale, newScale, offsetX: cameraOffsetX, offsetY: cameraOffsetY, focalX: focal.x, focalY: focal.y, ...dimensions() });
+      applyCamera(next);
+      const projected = { x: cameraOffsetX + before.x * cameraScale, y: cameraOffsetY + before.y * cameraScale };
+      return { before, errorX: projected.x - focal.x, errorY: projected.y - focal.y, state: state() };
+    }
+
+    function positionPopup(anchorRect) {
+      const margin = 6;
+      const width = Math.min(320, window.innerWidth - margin * 2);
+      bookingMenu.style.position = "fixed";
+      bookingMenu.style.right = "auto";
+      bookingMenu.style.bottom = "auto";
+      bookingMenu.style.width = `${width}px`;
+      bookingMenu.style.maxHeight = `${Math.min(440, window.innerHeight - margin * 2)}px`;
+      const height = bookingMenu.offsetHeight;
+      const left = Math.min(window.innerWidth - width - margin, Math.max(margin, anchorRect.left));
+      const below = anchorRect.bottom + 7;
+      const above = anchorRect.top - height - 7;
+      const top = below + height <= window.innerHeight - margin ? below : above >= margin ? above : Math.max(margin, window.innerHeight - height - margin);
+      bookingMenu.style.left = `${left}px`;
+      bookingMenu.style.top = `${top}px`;
+      return bookingMenu.getBoundingClientRect().toJSON();
+    }
+
+    function openClientPopup(rect = clientAnchor.getBoundingClientRect()) {
+      const before = state();
+      bookingMenu.hidden = false;
+      const popupRect = positionPopup(rect);
+      return { before, after: state(), popupRect };
+    }
+
+    zoomFirst.addEventListener("click", () => {
+      const rect = cameraViewport.getBoundingClientRect();
+      zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, 1.7);
+    });
+    panCamera.addEventListener("click", () => applyCamera({ scale: cameraScale, offsetX: cameraOffsetX - 72, offsetY: cameraOffsetY - 96 }));
+    openPopup.addEventListener("click", () => openClientPopup());
+    let popupEdge = 0;
+    openEdgePopup.addEventListener("click", () => {
+      const edgeRects = [
+        { left: 0, right: 20, top: 0, bottom: 20 },
+        { left: window.innerWidth - 20, right: window.innerWidth, top: 0, bottom: 20 },
+        { left: 0, right: 20, top: window.innerHeight - 20, bottom: window.innerHeight },
+        { left: window.innerWidth - 20, right: window.innerWidth, top: window.innerHeight - 20, bottom: window.innerHeight }
+      ];
+      const result = openClientPopup(edgeRects[popupEdge % edgeRects.length]);
+      document.body.dataset.edgePopup = JSON.stringify({ edge: popupEdge % edgeRects.length, rect: result.popupRect });
+      popupEdge += 1;
+    });
+    closePopup.addEventListener("click", () => { bookingMenu.hidden = true; });
+    openModal.addEventListener("click", () => fixtureDialog.showModal());
+    closeModal.addEventListener("click", () => fixtureDialog.close());
+    testCorners.addEventListener("click", () => {
+      const rect = cameraViewport.getBoundingClientRect();
+      const points = [
+        [rect.left + 12, rect.top + 12],
+        [rect.right - 12, rect.top + 12],
+        [rect.left + 12, rect.bottom - 12],
+        [rect.right - 12, rect.bottom - 12]
+      ];
+      const errors = points.map(([x, y]) => {
+        applyCamera({ scale: 1, offsetX: 0, offsetY: 0 });
+        const result = zoomAt(x, y, 1.8);
+        return { errorX: result.errorX, errorY: result.errorY };
+      });
+      document.body.dataset.cornerErrors = JSON.stringify(errors);
+    });
+    resetCamera.addEventListener("click", () => applyCamera({ scale: 1, offsetX: cameraOffsetX, offsetY: cameraOffsetY }));
+    window.addEventListener("resize", () => applyCamera(state()));
+
+    window.fixtureApi = {
+      applyCamera,
+      closePopup: () => { bookingMenu.hidden = true; return state(); },
+      contentPoint,
+      focusContentInput: () => { fixtureInput.focus(); return state(); },
+      focusDialogInput: () => { dialogInput.focus(); return state(); },
+      openClientPopup,
+      openDialog: () => { fixtureDialog.showModal(); return state(); },
+      closeDialog: () => { fixtureDialog.close(); return state(); },
+      panBy: (x, y) => applyCamera({ scale: cameraScale, offsetX: cameraOffsetX + x, offsetY: cameraOffsetY + y }),
+      resizeCamera: (width, height) => { cameraViewport.style.width = `${width}px`; cameraViewport.style.height = `${height}px`; return applyCamera(state()); },
+      state,
+      zoomAt
+    };
   </script>
 </body>
 </html>

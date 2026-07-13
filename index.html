@@ -35,14 +35,19 @@
         </div>
       </div>
       <div class="banner" id="banner" hidden></div>
-      <div class="timeline-shell" id="timelineShell" tabindex="0" aria-label="Calendarul rezervărilor">
-        <div class="timeline-scale" id="timelineScale"></div>
-        <div class="guest-timeline" id="guestTimeline"></div>
+      <div class="timeline-camera-viewport" id="cameraViewport">
+        <div class="timeline-camera-content" id="cameraContent">
+          <div class="timeline-shell" id="timelineShell" tabindex="0" aria-label="Calendarul rezervărilor">
+            <div class="timeline-scale" id="timelineScale"></div>
+            <div class="guest-timeline" id="guestTimeline"></div>
+          </div>
+        </div>
       </div>
     </section>
   </main>
 
-  <aside class="booking-menu" id="bookingMenu" aria-labelledby="bookingMenuTitle" hidden>
+  <div class="overlay-layer" id="overlayLayer">
+    <aside class="booking-menu" id="bookingMenu" aria-labelledby="bookingMenuTitle" hidden>
     <header>
       <strong id="bookingMenuTitle">ID: —</strong>
       <button class="booking-menu-close" data-close="bookingMenu" type="button" aria-label="Închide meniul rezervării">×</button>
@@ -60,7 +65,7 @@
       </div>
     </div>
     <div id="bookingMenuContent"></div>
-  </aside>
+    </aside>
 
   <aside class="side-panel" id="detailsPanel" aria-labelledby="detailsTitle" hidden>
     <header><div><p>Detalii rezervare</p><h2 id="detailsTitle">Rezervare</h2></div><button class="icon" data-close="detailsPanel" type="button" aria-label="Închide detaliile">×</button></header>
@@ -183,16 +188,18 @@
   </dialog>
 
   <aside class="diagnostics" id="diagnostics" hidden>
-    <header><div><p>Coada locală persistentă</p><h2>Diagnostic sincronizare</h2></div><button class="icon" data-close="diagnostics" type="button" aria-label="Închide diagnosticul">×</button></header>
+    <header><div><p>Coada locală persistentă</p><h2>Diagnostic sincronizare</h2></div><div class="diagnostic-header-actions"><button class="secondary compact" id="clearQueueIssues" type="button" hidden>Șterge problemele</button><button class="icon" data-close="diagnostics" type="button" aria-label="Închide diagnosticul">×</button></div></header>
     <div class="diagnostic-summary" id="diagnosticSummary"></div>
     <div class="command-list" id="commandList"></div>
   </aside>
 
-  <div class="toast" id="toast" hidden></div>
+    <div class="toast" id="toast" hidden></div>
+  </div>
   <script src="src/shared/booking-fields.js"></script>
   <script src="src/shared/pricing-note.js"></script>
   <script src="src/shared/timeline-adapter.js"></script>
   <script src="src/shared/booking-calendar.js"></script>
+  <script src="src/shared/camera-transform.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

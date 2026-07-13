@@ -30,13 +30,12 @@ test("cancelled pointers restore the original booking instead of syncing a resiz
   assert.doesNotMatch(appSource, /document\.addEventListener\("pointercancel", endDrag\)/);
 });
 
-test("horizontal pinch uses the original timeline width without camera layers", () => {
-  assert.match(indexSource, /<div class="timeline-shell" id="timelineShell"[^>]*>\s*<div class="timeline-scale" id="timelineScale"><\/div>\s*<div class="guest-timeline" id="guestTimeline"><\/div>/);
+test("horizontal pinch keeps the original timeline zoom inside the isolated camera", () => {
+  assert.match(indexSource, /<div class="timeline-camera-viewport" id="cameraViewport">\s*<div class="timeline-camera-content" id="cameraContent">\s*<div class="timeline-shell" id="timelineShell"[^>]*>\s*<div class="timeline-scale" id="timelineScale"><\/div>\s*<div class="guest-timeline" id="guestTimeline"><\/div>/);
   assert.match(stylesSource, /\.timeline-scale \.timeline-corner,\.timeline-unit\{position:sticky;left:0;/);
-  assert.doesNotMatch(indexSource, /timeline-camera|timeline-header-pane|timeline-row-pane/);
-  assert.doesNotMatch(appSource, /viewportZoom|setViewportZoom/);
+  assert.doesNotMatch(indexSource, /timeline-header-pane|timeline-row-pane/);
   assert.match(appSource, /function setTimelineZoom\(nextWidth, clientX, anchorDay = null/);
-  assert.match(appSource, /timelineShell\.addEventListener\("touchstart", beginTouchZoom, \{ passive: false \}\)/);
+  assert.match(appSource, /cameraViewport\.addEventListener\("touchstart", beginTouchZoom, \{ passive: false \}\)/);
   assert.match(appSource, /queueTimelineZoom\(touchZoomState\.startDayWidth \* scale, touchMidpointX\(event\.touches\), touchZoomState\.anchorDay\)/);
   const wheelSource = appSource.slice(appSource.indexOf("function handleTimelineWheel"), appSource.indexOf("function autoScrollDuringDrag"));
   assert.match(wheelSource, /wheelPinchState\.mode === "horizontal"[\s\S]*queueTimelineZoom\(baseWidth \* Math\.exp\(-delta \* 0\.01\), event\.clientX\)/);
@@ -49,26 +48,35 @@ test("horizontal pinch batches work and renders date numbers at every rounded fr
   assert.match(liveZoomSource, /updateDateGridBackground\(\)/);
   assert.match(appSource, /const next = Math\.round\(Math\.min\(MAX_ZOOM_DAY_WIDTH/);
   assert.doesNotMatch(appSource, /is-horizontal-pinching/);
-  assert.doesNotMatch(stylesSource, /is-horizontal-pinching|visibility:hidden/);
+  assert.doesNotMatch(stylesSource, /is-horizontal-pinching/);
+  assert.doesNotMatch(stylesSource, /\.timeline-(?:scale|day|row|unit)[^{]*\{[^}]*visibility:hidden/);
 });
 
-test("vertical pinch locks direction and magnifies only the root rendered surface", () => {
-  assert.match(appSource, /const MIN_DISPLAY_MAGNIFICATION = 1/);
-  assert.match(appSource, /const MAX_DISPLAY_MAGNIFICATION = 2/);
+test("vertical pinch locks direction and transforms only the camera content", () => {
+  assert.match(appSource, /const MIN_CAMERA_SCALE = 1/);
+  assert.match(appSource, /const MAX_CAMERA_SCALE = 2/);
   assert.match(appSource, /const PINCH_DIRECTION_THRESHOLD = 8/);
-  assert.match(appSource, /touchZoomState\.mode = horizontalChange >= verticalChange \? "horizontal" : "vertical"/);
-  assert.match(stylesSource, /:root\{[^}]*--display-magnification:1[^}]*transform:scale\(var\(--display-magnification\)\)[^}]*transform-origin:0 0/);
-  const displaySource = appSource.slice(appSource.indexOf("function setDisplayMagnification"), appSource.indexOf("function queueDisplayMagnification"));
-  assert.match(displaySource, /document\.documentElement\.style\.setProperty\("--display-magnification"/);
-  assert.match(displaySource, /window\.scrollTo\([\s\S]*anchor\.x \* displayMagnification - clientX[\s\S]*anchor\.y \* displayMagnification - clientY/);
-  assert.doesNotMatch(displaySource, /dayWidth|timeline|row|column|font|height|width/);
-  assert.doesNotMatch(indexSource, /timeline-camera|timeline-header-pane|timeline-row-pane/);
+  assert.match(appSource, /let cameraScale = 1;\s*let cameraOffsetX = 0;\s*let cameraOffsetY = 0;/);
+  assert.match(appSource, /let pinchStartScale = 1;\s*let pinchStartOffsetX = 0;\s*let pinchStartOffsetY = 0;\s*let pinchFocalPoint = null;/);
+  assert.match(appSource, /const isHorizontal = horizontalChange >= verticalChange/);
+  assert.match(appSource, /touchZoomState\.mode = isHorizontal \? "horizontal" : "vertical"/);
+  assert.doesNotMatch(stylesSource, /:root\{[^}]*transform:/);
+  assert.match(stylesSource, /\.app-shell\{position:relative\}/);
+  assert.match(stylesSource, /\.timeline-camera-viewport\{[^}]*overflow:hidden/);
+  assert.match(stylesSource, /\.timeline-camera-content\{[^}]*transform:translate3d\(0,0,0\) scale\(1\)[^}]*transform-origin:0 0[^}]*will-change:transform[^}]*contain:paint/);
+  assert.doesNotMatch(stylesSource, /\.app-shell\{[^}]*transform:/);
+  const cameraSource = appSource.slice(appSource.indexOf("function setCameraState"), appSource.indexOf("function queueCameraState"));
+  assert.match(cameraSource, /cameraContent\.style\.transform = `translate3d\(\$\{cameraOffsetX\}px, \$\{cameraOffsetY\}px, 0\) scale\(\$\{cameraScale\}\)`/);
+  assert.doesNotMatch(cameraSource, /window\.scroll|dayWidth|font|margin|padding/);
+  assert.doesNotMatch(appSource, /window\.scrollTo|displayMagnification|--display-magnification/);
 });
 
-test("manual timeline coordinates invert the display magnification", () => {
-  assert.match(appSource, /const x = \(event\.clientX - rect\.left\) \/ displayMagnification - timelineUnitWidth\(\) \+ timelineScrollLeft\(\)/);
-  assert.match(appSource, /\(event\.clientX - dragState\.clientX\) \/ displayMagnification/);
-  assert.match(appSource, /previousBounds\.right - currentBounds\.left\) \/ displayMagnification/);
+test("screen coordinates are explicitly converted through the inverse camera transform", () => {
+  assert.match(appSource, /function screenToCameraViewport\(clientX, clientY\)[\s\S]*clientX - rect\.left[\s\S]*clientY - rect\.top/);
+  assert.match(appSource, /function screenToCameraContent\(clientX, clientY, state = currentCameraState\(\)\)[\s\S]*CameraTransform\.viewportToContent/);
+  assert.match(appSource, /const x = \(event\.clientX - rect\.left\) \/ cameraScale - timelineUnitWidth\(\) \+ timelineScrollLeft\(\)/);
+  assert.match(appSource, /\(event\.clientX - dragState\.clientX\) \/ cameraScale/);
+  assert.match(appSource, /previousBounds\.right - currentBounds\.left\) \/ cameraScale/);
 });
 
 test("high resolution horizontal scrolling preserves the full trackpad delta", () => {
@@ -91,6 +99,13 @@ test("phone and Fold timelines keep enough width for complete room identifiers",
   assert.match(appSource, /label\.title = row\.resource\.title/);
 });
 
+test("desktop and mobile shells fit the physical viewport without page scrollbars", () => {
+  assert.match(stylesSource, /html,body\{width:100%;height:100%;overflow:hidden\}/);
+  assert.match(stylesSource, /\.app-shell\{display:grid;grid-template-rows:auto minmax\(0,1fr\);height:100dvh;min-height:0;overflow:hidden/);
+  assert.match(stylesSource, /\.timeline-panel\{min-height:0;overflow:hidden;display:grid;grid-template-rows:auto auto minmax\(0,1fr\)/);
+  assert.match(stylesSource, /\.timeline-camera-viewport\{grid-row:3;[^}]*height:auto;min-height:0;max-height:none;overflow:hidden/);
+});
+
 test("camping alone uses a compact timeline category column", () => {
   assert.match(stylesSource, /\.timeline-shell\.is-camping-workspace\{--timeline-unit-width:112px\}/);
   assert.match(appSource, /function timelineUnitWidth\(\)[\s\S]*getComputedStyle\(timelineShell\)[\s\S]*--timeline-unit-width/);
@@ -104,7 +119,8 @@ test("past timeline days and only the past segment of reservations are faded", (
   assert.match(appSource, /--timeline-past-width", `calc\(\$\{normalized\} \* var\(--timeline-day-width\)\)`/);
   assert.doesNotMatch(appSource, /function updateRenderedPastWidths/);
   assert.match(stylesSource, /--timeline-booking-bg:#ffeead/);
-  assert.match(stylesSource, /--timeline-booking-bg:#36A83F/);
+  assert.match(stylesSource, /--timeline-booking-bg:#6aa352/);
+  assert.match(stylesSource, /--timeline-booking-bg-past:#adcda0/);
   assert.match(stylesSource, /linear-gradient\(to right,var\(--timeline-booking-bg-past\) 0 var\(--timeline-past-width\),var\(--timeline-booking-bg\) var\(--timeline-past-width\) 100%\)/);
   assert.match(stylesSource, /\.timeline-scale \.timeline-day\.is-past/);
 });
@@ -112,6 +128,30 @@ test("past timeline days and only the past segment of reservations are faded", (
 test("client popup uses viewport-safe positioning on phone and Fold widths", () => {
   const positionSource = appSource.slice(appSource.indexOf("function positionBookingMenu"), appSource.indexOf("function openBookingMenu"));
   assert.match(positionSource, /matchMedia\("\(max-width: 900px\)"\)/);
-  assert.match(positionSource, /removeProperty\("left"\)[\s\S]*removeProperty\("top"\)/);
+  assert.match(appSource, /function prepareBookingMenuPosition\(\) \{[\s\S]*bookingMenu\.style\.position = "fixed"/);
+  assert.match(positionSource, /Math\.min\(mobile \? 320 : 342, window\.innerWidth - margin \* 2\)/);
+  assert.match(positionSource, /bookingMenu\.style\.width = `\$\{targetWidth\}px`/);
+  assert.match(positionSource, /bookingMenu\.style\.maxHeight = `\$\{targetMaxHeight\}px`/);
+  assert.match(positionSource, /anchorRect\.bottom \+ 7/);
+  assert.match(positionSource, /bookingMenu\.style\.left = `\$\{left\}px`/);
+  assert.match(positionSource, /bookingMenu\.style\.top = `\$\{top\}px`/);
+  assert.match(stylesSource, /\.booking-menu\{[^}]*overflow-anchor:none/);
+  assert.doesNotMatch(stylesSource.match(/\.booking-menu\{[^}]*\}/)?.[0] || "", /transform:/);
   assert.match(stylesSource, /\.booking-menu\{inset:auto 6px max\(6px,env\(safe-area-inset-bottom\)\);width:auto;max-height:min\(520px,calc\(100dvh/);
+});
+
+test("opening a client popup cannot read or mutate camera state", () => {
+  const openSource = appSource.slice(appSource.indexOf("function openBookingMenu"), appSource.indexOf("function dismissBookingMenu"));
+  assert.match(openSource, /const anchorRect = anchor\.getBoundingClientRect\(\)/);
+  assert.match(openSource, /prepareBookingMenuPosition\(\);\s*bookingMenu\.hidden = false/);
+  assert.match(openSource, /positionBookingMenu\(anchorRect\)/);
+  assert.doesNotMatch(openSource, /window\.scroll|scrollX|scrollY|cameraScale|cameraOffset|setCamera|requestAnimationFrame/);
+  assert.match(indexSource, /<\/main>\s*<div class="overlay-layer" id="overlayLayer">\s*<aside class="booking-menu"/);
+});
+
+test("menus, side panels, dialogs, diagnostics, and toasts stay in the unscaled overlay layer", () => {
+  assert.match(stylesSource, /\.overlay-layer\{position:fixed;inset:0;z-index:50;pointer-events:none\}/);
+  assert.match(indexSource, /<div class="overlay-layer" id="overlayLayer">[\s\S]*id="bookingMenu"[\s\S]*id="detailsPanel"[\s\S]*<dialog id="paymentDialog"[\s\S]*<dialog id="createDialog"[\s\S]*<dialog id="settingsDialog"[\s\S]*id="diagnostics"[\s\S]*id="toast"/);
+  assert.doesNotMatch(appSource, /bookingMenu\.addEventListener\("touch|bookingMenu\.addEventListener\("wheel/);
+  assert.doesNotMatch(appSource, /setBookingMenuTransformOrigin|beginBookingMenuZoom|handleBookingMenuWheel/);
 });
