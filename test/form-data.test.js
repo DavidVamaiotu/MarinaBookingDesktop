@@ -22,6 +22,18 @@ test("aggregate WordPress field collections fill missing fields without overridi
   assert.equal(result.telefon4.value, "0712");
 });
 
+test("aggregate WordPress schemas do not import empty fields into booking data", () => {
+  const emptyFields = Array.from({ length: 100 }, (_, index) => ({ field_name: `schema_${index}`, field_value: "", field_type: "text" }));
+  const result = normalizeFormData({
+    name23: { value: "Ana", type: "text" },
+    _all_fields_: [...emptyFields, { field_name: "details23", field_value: "Sosire târzie", field_type: "textarea" }]
+  });
+  assert.deepEqual(result, {
+    details23: { value: "Sosire târzie", type: "textarea" },
+    name23: { value: "Ana", type: "text" }
+  });
+});
+
 test("serialized JSON form data is normalized instead of discarded", () => {
   assert.equal(normalizeFormData(JSON.stringify({ observatii2: { raw_value: "Fără gluten", type: "textarea" } })).observatii2.value, "Fără gluten");
 });

@@ -442,28 +442,47 @@ test("mobile rejects HTTP 200 WordPress errors instead of updating its local cac
   assert.equal(restored.commands[0].errorCode, "rest_cookie_invalid_nonce");
 });
 
-test("mobile edits check the full room stay while excluding the edited booking", async () => {
+test("mobile room moves compact suffixed form fields before checking and saving", async () => {
   const requests = [];
-  const booking = { booking_id: 66, resource_id: 4, approved: 0, dates: [{ date: "2026-07-16" }, { date: "2026-07-17" }], form_data: { name: { value: "Elena", type: "text" } } };
+  const emptySchemaFields = Object.fromEntries(Array.from({ length: 100 }, (_, index) => [`optional_${index}31`, { value: "", type: "text" }]));
+  const booking = {
+    booking_id: 66,
+    resource_id: 31,
+    approved: 0,
+    dates: [{ date: "2026-07-16" }, { date: "2026-07-17" }],
+    form_data: {
+      name31: { value: "Elena", type: "text" },
+      firstname31: { value: "", type: "text" },
+      email31: { value: "elena@example.test", type: "email" },
+      details31: { value: "Păstrează observația", type: "textarea" },
+      ...emptySchemaFields
+    }
+  };
   const harness = await configuredBridge(async (url, options = {}) => {
     requests.push({ url, options });
     if (url.endsWith("/availability")) return jsonResponse({ available: true });
     if (url.endsWith("/bookings/66") && options.method === "PATCH") return jsonResponse({ ok: true });
-    if (url.endsWith("/resources")) return jsonResponse({ resources: [{ id: 4, title: "Camera 4", active: true }] });
+    if (url.endsWith("/resources")) return jsonResponse({ resources: [{ id: 31, title: "Camera 31", active: true }, { id: 23, title: "Bungalow Superior 23", active: true }] });
     if (url.includes("/bookings?")) return jsonResponse({ bookings: [booking] });
     throw new Error(`Unexpected synthetic request: ${url}`);
   });
   await harness.marina.refresh({ start: "2026-07-01", end: "2026-07-31" });
-  await harness.marina.editBooking("server:66", { resourceId: 4, dates: ["2026-07-16", "2026-07-17", "2026-07-18"], formData: booking.form_data, bookingFormType: "standard", note: "Cost total: 900 RON", sendEmail: true });
+  await harness.marina.editBooking("server:66", { resourceId: 23, sourceResourceId: 31, dates: ["2026-07-16", "2026-07-17", "2026-07-18"], formData: booking.form_data, bookingFormType: "standard", note: "Cost total: 900 RON", sendEmail: true });
   const availability = requests.find((item) => item.url.endsWith("/availability"));
   const edit = requests.find((item) => item.url.endsWith("/bookings/66") && item.options.method === "PATCH");
   assert.deepEqual(JSON.parse(availability.options.body), {
-    resource_id: 4,
+    resource_id: 23,
     dates: ["2026-07-16 15:00:01", "2026-07-17 00:00:00", "2026-07-18 12:00:02"],
     exclude_booking_id: 66
   });
-  assert.equal(JSON.parse(edit.options.body).send_email, true);
-  assert.equal(JSON.parse(edit.options.body).note, "Cost total: 900 RON");
+  const editBody = JSON.parse(edit.options.body);
+  assert.equal(editBody.send_email, true);
+  assert.equal(editBody.note, "Cost total: 900 RON");
+  assert.deepEqual(editBody.form_data, {
+    details: { type: "textarea", value: "Păstrează observația" },
+    email: { type: "email", value: "elena@example.test" },
+    name: { type: "text", value: "Elena" }
+  });
 });
 
 test("mobile never edits a reservation after an incomplete availability response", async () => {

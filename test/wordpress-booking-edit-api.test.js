@@ -36,3 +36,8 @@ test("resource edits derive and verify partial-day boundaries before commit", ()
   assert.match(editSource, /marina_booking_api_edit_verification_failed/);
   assert.ok(editSource.indexOf("saved_dates_match") < editSource.indexOf("'COMMIT'"));
 });
+
+test("resource edits strip the current WordPress field suffix before saving and moving", () => {
+  assert.match(source, /private static function form_data_without_resource_suffix/);
+  assert.match(editSource, /form_data_without_resource_suffix\( \$form_data, \$existing_resource_id \)/);
+});

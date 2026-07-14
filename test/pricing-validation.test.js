@@ -34,6 +34,15 @@ test("price preview validation rejects invalid resources, dates and empty form d
   assert.throws(() => quoteInput({ resourceId: 14, dates: ["2026-07-22"], formData: { visitors: { value: "1", type: "selectbox-one" } }, mode: "slow" }), /modul/);
 });
 
+test("price preview validation rejects more than 80 form fields locally with the exact count", () => {
+  const formData = Object.fromEntries(Array.from({ length: 81 }, (_, index) => [`field_${index}`, { value: String(index), type: "text" }]));
+  assert.throws(() => quoteInput({ resourceId: 1, dates: ["2026-07-20"], formData, bookingFormType: "standard", mode: "full" }), (error) => {
+    assert.equal(error.code, "form_data_too_many_fields");
+    assert.equal(error.fieldCount, 81);
+    return true;
+  });
+});
+
 test("renderer uses fast quotes while editing and forced full quotes before saves", () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
   assert.match(source, /setTimeout\(\(\) => void fetchCreateQuote\(requestId, key, \{ mode: "fast", source \}\), 300\)/);

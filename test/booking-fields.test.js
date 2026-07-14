@@ -39,3 +39,37 @@ test("popup details support translated names and custom textarea fields", () => 
   assert.equal(BookingFields.detailsValue({ formData: { cerere_client4: { value: "Pătuț", type: "textarea" } } }), "Pătuț");
   assert.equal(BookingFields.detailsValue({ formData: { internal_code: { value: "ABC", type: "text" } } }), "");
 });
+
+test("outbound form data compacts aliases and strips only the current resource suffix", () => {
+  const prepared = BookingFields.prepareFormData({
+    name31: { value: "Ana", type: "text" },
+    firstname31: { value: "Ana", type: "text" },
+    email31: { value: "ana@example.test", type: "email" },
+    children31: { value: "0", type: "selectbox-one" },
+    custom_code2_31: { value: "A2", type: "text" },
+    empty_schema_field31: { value: "", type: "text" }
+  }, 31);
+
+  assert.deepEqual(prepared, {
+    name: { value: "Ana", type: "text" },
+    email: { value: "ana@example.test", type: "email" },
+    children: { value: "0", type: "selectbox-one" },
+    custom_code2_: { value: "A2", type: "text" }
+  });
+});
+
+test("outbound form data prefers direct canonical values and reports the real field count", () => {
+  const direct = BookingFields.prepareFormData({
+    name31: { value: "Alias", type: "text" },
+    name: { value: "Direct", type: "text" }
+  }, 31);
+  assert.equal(direct.name.value, "Direct");
+
+  const tooMany = Object.fromEntries(Array.from({ length: 81 }, (_, index) => [`custom_${index}`, { value: String(index), type: "text" }]));
+  assert.throws(() => BookingFields.prepareFormData(tooMany, 31), (error) => {
+    assert.equal(error.code, "form_data_too_many_fields");
+    assert.equal(error.fieldCount, 81);
+    assert.equal(error.maxFields, 80);
+    return true;
+  });
+});

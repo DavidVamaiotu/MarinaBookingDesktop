@@ -4,6 +4,7 @@ import { Preferences } from "@capacitor/preferences";
 import { SecureStorage } from "@aparajita/capacitor-secure-storage";
 import { canonicalValue, createOperationSignature, normalizeMobilePriceQuote, retryDelayMs, scopeMobileData, serverIdFromPayload } from "../src/shared/mobile-api.js";
 import { normalizeFormData } from "../src/shared/form-data.js";
+import * as BookingFields from "../src/shared/booking-fields.js";
 import * as PricingNote from "../src/shared/pricing-note.js";
 import * as PaymentRequest from "../src/shared/payment-request.js";
 
@@ -776,12 +777,14 @@ if (!window.marina) {
       const source = SOURCES.has(patch?.source) ? patch.source : currentSource;
       const range = currentRange;
       const bookingId = serverId(id);
-      return trackedMutation({ source, key: `booking:${source}:${bookingId}`, type: "edit", bookingLocalId: id, resourceId: patch.resourceId, payload: patch }, async () => {
+      const formData = BookingFields.prepareFormData(patch.formData, patch.sourceResourceId);
+      const mutationPatch = { ...patch, formData };
+      return trackedMutation({ source, key: `booking:${source}:${bookingId}`, type: "edit", bookingLocalId: id, resourceId: patch.resourceId, payload: mutationPatch }, async () => {
         const expectedApiBaseUrl = normalizeBaseUrl((await allSettings())[source]?.apiBaseUrl);
         const stayTimes = source === "camping" ? { checkIn: "14:00:01", checkOut: "12:00:02" } : {};
         const apiDates = window.BookingCalendar.toStayDateTimes(patch.dates, stayTimes);
         await requireAvailability(source, expectedApiBaseUrl, patch.resourceId, apiDates, bookingId);
-        const editBody = { resource_id: patch.resourceId, dates: apiDates, form_data: canonicalValue(patch.formData), booking_form_type: patch.bookingFormType || "", send_email: Boolean(patch.sendEmail) };
+        const editBody = { resource_id: patch.resourceId, dates: apiDates, form_data: canonicalValue(formData), booking_form_type: patch.bookingFormType || "", send_email: Boolean(patch.sendEmail) };
         if (patch.note !== undefined) editBody.note = String(patch.note);
         const { payload } = await request(`/bookings/${bookingId}`, {
           method: "PATCH",
@@ -795,7 +798,7 @@ if (!window.marina) {
           dates: normalizedDates,
           startDate: normalizedDates[0] || "",
           endDate: normalizedDates.at(-1) || "",
-          formData: canonicalValue(patch.formData)
+          formData: canonicalValue(formData)
         };
         if (patch.note !== undefined) cachePatch.note = String(patch.note);
         await updateCachedBooking(source, bookingId, cachePatch);
@@ -846,10 +849,11 @@ if (!window.marina) {
     },
     async quoteBooking(input) {
       const source = SOURCES.has(input?.source) ? input.source : currentSource;
-      const key = JSON.stringify(canonicalValue({ source, resourceId: input.resourceId, dates: [...input.dates].sort(), formData: input.formData, bookingFormType: input.bookingFormType, mode: input.mode }));
+      const formData = BookingFields.prepareFormData(input.formData, input.sourceResourceId);
+      const key = JSON.stringify(canonicalValue({ source, resourceId: input.resourceId, dates: [...input.dates].sort(), formData, bookingFormType: input.bookingFormType, mode: input.mode }));
       const cached = input.forceFresh ? null : quoteCache.get(key);
       if (cached && cached.expiresAt > Date.now()) return cached.value;
-      const { payload, headers } = await request("/prices/calculate", { method: "POST", body: { resource_id: input.resourceId, dates: [...new Set(input.dates)].sort(), form_data: input.formData, booking_form_type: input.bookingFormType || "", mode: input.mode || "fast" }, readOnly: true }, null, source);
+      const { payload, headers } = await request("/prices/calculate", { method: "POST", body: { resource_id: input.resourceId, dates: [...new Set(input.dates)].sort(), form_data: formData, booking_form_type: input.bookingFormType || "", mode: input.mode || "fast" }, readOnly: true }, null, source);
       const quote = normalizeMobilePriceQuote(payload, headers);
       quoteCache.set(key, { value: quote, expiresAt: Date.now() + (input.mode === "full" ? 15000 : 30000) });
       return quote;

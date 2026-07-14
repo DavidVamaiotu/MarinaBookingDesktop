@@ -142,7 +142,10 @@ function invoke_update() {
 		array(
 			'resource_id' => 32,
 			'dates' => array( '2026-08-10 15:00:01', '2026-08-11 00:00:00', '2026-08-12 12:00:02' ),
-			'form_data' => array( 'name' => array( 'type' => 'text', 'value' => 'Synthetic Guest' ) ),
+			'form_data' => array(
+				'name31'  => array( 'type' => 'text', 'value' => 'Synthetic Guest' ),
+				'email31' => array( 'type' => 'email', 'value' => 'synthetic@example.test' ),
+			),
 			'note' => 'Client kept this note: 450 RON',
 			'send_email' => false,
 		)
@@ -157,6 +160,8 @@ if ( $result instanceof WP_Error ) { fwrite( STDERR, $result->get_error_code() .
 harness_assert( $result instanceof WP_REST_Response, 'Successful move did not return a REST response.' );
 harness_assert( 32 === $GLOBALS['harness_state']['booking']['booking_type'], 'Destination resource was not saved.' );
 harness_assert( false !== strpos( $GLOBALS['harness_state']['booking']['form'], '^name32^Synthetic Guest' ), 'Name suffix was not moved.' );
+harness_assert( false !== strpos( $GLOBALS['harness_state']['booking']['form'], '^email32^synthetic@example.test' ), 'Email suffix was not moved.' );
+harness_assert( false === strpos( $GLOBALS['harness_state']['booking']['form'], '^name3132^' ), 'The source resource suffix was duplicated during the move.' );
 harness_assert( false !== strpos( $GLOBALS['harness_state']['booking']['form'], '^starttime32^15:00' ), 'Start time was not preserved.' );
 harness_assert( false !== strpos( $GLOBALS['harness_state']['booking']['form'], '^endtime32^12:00' ), 'End time was not preserved.' );
 harness_assert( 'Client kept this note: 450 RON' === $GLOBALS['harness_state']['booking']['remark'], 'Submitted note was changed.' );

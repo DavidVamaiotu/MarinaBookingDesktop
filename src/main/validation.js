@@ -49,6 +49,7 @@ function formData(value) {
     result[name] = { value: text(field.value, name, 2000), type: text(field.type || "text", `${name}.type`, 64, true) };
   }
   if (!Object.keys(result).length) throw new TypeError("Este necesar cel puțin un câmp de formular.");
+  if (Object.keys(result).length > 80) throw Object.assign(new TypeError(`Rezervarea conține ${Object.keys(result).length} câmpuri; limita acceptată este 80.`), { code: "form_data_too_many_fields", fieldCount: Object.keys(result).length, maxFields: 80 });
   return result;
 }
 
@@ -64,10 +65,13 @@ function quoteInput(value) {
   value = object(value);
   const resourceId = Number(value.resourceId);
   if (!Number.isInteger(resourceId) || resourceId < 1) throw new TypeError("resourceId trebuie să fie un număr întreg pozitiv.");
+  const sourceResourceId = value.sourceResourceId === undefined ? undefined : Number(value.sourceResourceId);
+  if (sourceResourceId !== undefined && (!Number.isInteger(sourceResourceId) || sourceResourceId < 1)) throw new TypeError("sourceResourceId trebuie să fie un număr întreg pozitiv.");
   const mode = text(value.mode || "fast", "mode", 4, true);
   if (!["fast", "full"].includes(mode)) throw new TypeError("modul trebuie să fie fast sau full.");
   return {
     resourceId,
+    sourceResourceId,
     dates: dates(value.dates),
     formData: formData(value.formData),
     bookingFormType: text(value.bookingFormType, "bookingFormType", 80),

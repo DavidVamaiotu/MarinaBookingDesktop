@@ -1968,9 +1968,10 @@ async function endDrag(event) {
   const source = activeWorkspace;
   try {
     const bookingFormType = resourceById(completed.booking.resourceId)?.defaultForm || "";
-    requireValidQuote(await window.marina.quoteBooking({ resourceId: completed.booking.resourceId, dates: completed.booking.dates, formData: completed.booking.formData, bookingFormType, mode: "full", forceFresh: true, source }));
+    const formData = BookingFields.prepareFormData(completed.booking.formData, completed.booking.resourceId);
+    requireValidQuote(await window.marina.quoteBooking({ resourceId: completed.booking.resourceId, sourceResourceId: completed.booking.resourceId, dates: completed.booking.dates, formData, bookingFormType, mode: "full", forceFresh: true, source }));
     if (source !== activeWorkspace) throw workspaceChangedError();
-    await runApiAction("editBooking", completed.booking.localId, { dates: completed.booking.dates, resourceId: completed.booking.resourceId, formData: completed.booking.formData, bookingFormType, source });
+    await runApiAction("editBooking", completed.booking.localId, { dates: completed.booking.dates, resourceId: completed.booking.resourceId, sourceResourceId: completed.booking.resourceId, formData, bookingFormType, source });
     renderTimeline();
     void refreshRange({ force: false, quiet: true });
   } catch (error) {
@@ -2127,10 +2128,11 @@ $("#detailsForm").addEventListener("submit", async (event) => {
     }
     const dates = rangeDates(form.elements.start.value, form.elements.end.value);
     const bookingFormType = resourceById(resourceId)?.defaultForm || "";
-    requireValidQuote(await window.marina.quoteBooking({ resourceId, dates, formData, bookingFormType, mode: "full", forceFresh: true, source }));
+    const outboundFormData = BookingFields.prepareFormData(formData, booking.resourceId);
+    requireValidQuote(await window.marina.quoteBooking({ resourceId, sourceResourceId: booking.resourceId, dates, formData: outboundFormData, bookingFormType, mode: "full", forceFresh: true, source }));
     if (source !== activeWorkspace || selectedBookingId !== booking.localId) throw workspaceChangedError();
     closeBookingOverlays();
-    await runApiAction("editBooking", booking.localId, { resourceId, dates, formData, bookingFormType, note: form.elements.note.value, sendEmail: Boolean(form.elements.sendEmail.checked), source });
+    await runApiAction("editBooking", booking.localId, { resourceId, sourceResourceId: booking.resourceId, dates, formData: outboundFormData, bookingFormType, note: form.elements.note.value, sendEmail: Boolean(form.elements.sendEmail.checked), source });
   } catch (error) { showError(error); } });
 });
 $("#detailsForm").addEventListener("input", (event) => {

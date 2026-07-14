@@ -1104,6 +1104,7 @@ final class Marina_Booking_API {
 		if ( is_wp_error( $form_data ) ) {
 			return $form_data;
 		}
+		$form_data = self::form_data_without_resource_suffix( $form_data, $existing_resource_id );
 		$form_data = self::form_data_with_date_times( $form_data, $dates );
 
 		$params = self::booking_save_params( $payload );
@@ -2363,6 +2364,37 @@ final class Marina_Booking_API {
 			$form_data['endtime']   = array( 'value' => substr( $last, 11, 5 ), 'type' => 'text' );
 		}
 		return $form_data;
+	}
+
+	/**
+	 * Booking Calendar exposes stored field names with the current resource ID
+	 * appended (for example name31). Its developer save helper appends that ID
+	 * itself, so edits must pass the unsuffixed name to avoid name3131 and to let
+	 * the native resource-move helper rewrite it to the destination suffix.
+	 *
+	 * @param array $form_data Normalized form fields.
+	 * @param int   $resource_id Current booking resource ID.
+	 * @return array
+	 */
+	private static function form_data_without_resource_suffix( $form_data, $resource_id ) {
+		$suffix = (string) absint( $resource_id );
+		if ( '' === $suffix ) {
+			return $form_data;
+		}
+
+		$result = array();
+		foreach ( $form_data as $name => $field ) {
+			$canonical_name = (string) $name;
+			if ( strlen( $canonical_name ) > strlen( $suffix ) && substr( $canonical_name, -strlen( $suffix ) ) === $suffix ) {
+				$canonical_name = substr( $canonical_name, 0, -strlen( $suffix ) );
+			}
+			$current_value = isset( $result[ $canonical_name ]['value'] ) ? (string) $result[ $canonical_name ]['value'] : '';
+			$next_value    = isset( $field['value'] ) ? (string) $field['value'] : '';
+			if ( ! isset( $result[ $canonical_name ] ) || ( '' === $current_value && '' !== $next_value ) ) {
+				$result[ $canonical_name ] = $field;
+			}
+		}
+		return $result;
 	}
 
 	/**

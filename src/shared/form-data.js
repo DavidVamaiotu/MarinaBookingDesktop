@@ -95,30 +95,32 @@ function parsedCollection(source) {
   }
 }
 
-function addField(result, name, field) {
+function addField(result, name, field, { includeEmpty = true } = {}) {
   name = String(name || "").trim();
   if (!name || AGGREGATE_KEYS.has(name)) return;
   if (field && typeof field === "object" && !Array.isArray(field) && !hasValueKey(field)) return;
+  const value = String(formValue(field));
+  if (!includeEmpty && !value) return;
   result[name] = {
-    value: String(formValue(field)),
+    value,
     type: String(field?.type || field?.field_type || (name.toLowerCase().startsWith("email") ? "email" : "text"))
   };
 }
 
-function collectFormData(source, result, depth = 0) {
+function collectFormData(source, result, depth = 0, aggregate = false) {
   source = parsedCollection(source);
   if (!source || depth > 3) return;
   if (Array.isArray(source)) {
-    for (const field of source) addField(result, field?.name || field?.field_name || field?.key, field);
+    for (const field of source) addField(result, field?.name || field?.field_name || field?.key, field, { includeEmpty: !aggregate });
     return;
   }
   if (typeof source !== "object") return;
   for (const key of AGGREGATE_KEYS) {
-    if (source[key]) collectFormData(source[key], result, depth + 1);
+    if (source[key]) collectFormData(source[key], result, depth + 1, true);
   }
   for (const [name, field] of Object.entries(source)) {
     if (AGGREGATE_KEYS.has(name)) continue;
-    addField(result, name, field);
+    addField(result, name, field, { includeEmpty: !aggregate });
   }
 }
 
