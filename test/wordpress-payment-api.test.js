@@ -7,8 +7,8 @@ const path = require("node:path");
 
 const source = readFileSync(path.join(__dirname, "..", "wordpress-plugin", "marina-booking-api-v1.0.2", "marina-booking-api.php"), "utf8");
 
-test("WordPress bridge v1.0.5 exposes idempotent deposit and payment-request routes", () => {
-  assert.match(source, /Version: 1\.0\.5/);
+test("WordPress bridge v1.0.6 exposes idempotent deposit and payment-request routes", () => {
+  assert.match(source, /Version: 1\.0\.6/);
   assert.match(source, /'\/bookings\/\(\?P<id>\\\\d\+\)\/payment'/);
   assert.match(source, /'\/bookings\/\(\?P<id>\\\\d\+\)\/deposit'/);
   assert.match(source, /'\/bookings\/\(\?P<id>\\\\d\+\)\/payment-request'/);

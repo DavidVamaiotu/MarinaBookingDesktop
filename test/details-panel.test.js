@@ -95,7 +95,7 @@ test("new reservations default to pending with notifications opt-in", () => {
   assert.match(appSource, /form\.elements\.approved\.checked = false/);
   assert.match(appSource, /form\.elements\.sendEmail\.checked = false/);
   assert.match(appSource, /sendEmail: Boolean\(form\.elements\.sendEmail\.checked\)/);
-  assert.match(appSource, /bookingFormType, sendEmail: Boolean\(form\.elements\.sendEmail\.checked\), source/);
+  assert.match(appSource, /bookingFormType, note: form\.elements\.note\.value, sendEmail: Boolean\(form\.elements\.sendEmail\.checked\), source/);
   assert.match(appSource, /sendEmail: false, source/);
 });
 

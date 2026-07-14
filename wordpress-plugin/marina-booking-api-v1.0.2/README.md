@@ -1,4 +1,10 @@
-# Marina Booking API v1.0.5
+# Marina Booking API v1.0.6
+
+## New in v1.0.6: safe booking resource moves
+
+Editing a booking can now move it to another Booking Calendar resource without losing guest fields or check-in/check-out boundaries. The bridge saves the edited booking against its current resource first, then delegates the move to Booking Calendar's native resource-change helper so field suffixes and the destination resource stay aligned.
+
+The edit request also carries the note currently shown in the app. Resource moves preserve that note exactly and do not recalculate it for the destination resource.
 
 ## New in v1.0.5: queued deposit collection
 
@@ -85,7 +91,7 @@ Base path:
 | GET | `/bookings/by-external-id/YOUR-ID` | Exact external-ID lookup | No |
 | POST | `/bookings` | Create booking | **Yes** |
 | GET | `/bookings/{id}` | Read one booking | No |
-| PUT/PATCH | `/bookings/{id}` | Edit dates/form data | **Yes** |
+| PUT/PATCH | `/bookings/{id}` | Edit dates/form data/note and move resources | **Yes** |
 | POST | `/bookings/{id}/status` | Set approved/pending | **Yes** |
 | POST | `/bookings/{id}/note` | Replace internal remark | **Yes** |
 | POST | `/bookings/{id}/trash` | Trash/restore | **Yes** |

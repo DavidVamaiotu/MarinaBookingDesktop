@@ -454,7 +454,7 @@ test("mobile edits check the full room stay while excluding the edited booking",
     throw new Error(`Unexpected synthetic request: ${url}`);
   });
   await harness.marina.refresh({ start: "2026-07-01", end: "2026-07-31" });
-  await harness.marina.editBooking("server:66", { resourceId: 4, dates: ["2026-07-16", "2026-07-17", "2026-07-18"], formData: booking.form_data, bookingFormType: "standard", sendEmail: true });
+  await harness.marina.editBooking("server:66", { resourceId: 4, dates: ["2026-07-16", "2026-07-17", "2026-07-18"], formData: booking.form_data, bookingFormType: "standard", note: "Cost total: 900 RON", sendEmail: true });
   const availability = requests.find((item) => item.url.endsWith("/availability"));
   const edit = requests.find((item) => item.url.endsWith("/bookings/66") && item.options.method === "PATCH");
   assert.deepEqual(JSON.parse(availability.options.body), {
@@ -463,6 +463,7 @@ test("mobile edits check the full room stay while excluding the edited booking",
     exclude_booking_id: 66
   });
   assert.equal(JSON.parse(edit.options.body).send_email, true);
+  assert.equal(JSON.parse(edit.options.body).note, "Cost total: 900 RON");
 });
 
 test("mobile never edits a reservation after an incomplete availability response", async () => {

@@ -20,6 +20,16 @@ test("create commands preserve the Booking Calendar form used for native pricing
   db.close();
 });
 
+test("resource edits carry the booking note in the same API command", () => {
+  const db = new BookingDatabase(":memory:");
+  db.writeBooking({ serverId: 702, resourceId: 31, dates: ["2026-07-20", "2026-07-21"], formData: input().formData, note: "Cost total: 900 RON", status: "approved" });
+  db.optimisticUpdate("server:702", { resourceId: 32, note: "Cost total: 900 RON" }, "edit");
+  const command = db.readyCommands()[0];
+  assert.equal(command.payload.resource_id, 32);
+  assert.equal(command.payload.note, "Cost total: 900 RON");
+  db.close();
+});
+
 test("customer details survive API normalization and the normalized SQLite field table", () => {
   const db = new BookingDatabase(":memory:");
   const formData = normalizeFormData({ cerere_client7: { field_value: "Cameră liniștită", field_type: "textarea" } });

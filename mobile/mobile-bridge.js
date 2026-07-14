@@ -781,20 +781,24 @@ if (!window.marina) {
         const stayTimes = source === "camping" ? { checkIn: "14:00:01", checkOut: "12:00:02" } : {};
         const apiDates = window.BookingCalendar.toStayDateTimes(patch.dates, stayTimes);
         await requireAvailability(source, expectedApiBaseUrl, patch.resourceId, apiDates, bookingId);
+        const editBody = { resource_id: patch.resourceId, dates: apiDates, form_data: canonicalValue(patch.formData), booking_form_type: patch.bookingFormType || "", send_email: Boolean(patch.sendEmail) };
+        if (patch.note !== undefined) editBody.note = String(patch.note);
         const { payload } = await request(`/bookings/${bookingId}`, {
           method: "PATCH",
           idempotencyKey: crypto.randomUUID(),
           expectedApiBaseUrl,
-          body: { resource_id: patch.resourceId, dates: apiDates, form_data: canonicalValue(patch.formData), booking_form_type: patch.bookingFormType || "", send_email: Boolean(patch.sendEmail) }
+          body: editBody
         }, null, source);
         const normalizedDates = [...new Set(patch.dates.map((date) => String(date).slice(0, 10)))].sort();
-        await updateCachedBooking(source, bookingId, {
+        const cachePatch = {
           resourceId: Number(patch.resourceId),
           dates: normalizedDates,
           startDate: normalizedDates[0] || "",
           endDate: normalizedDates.at(-1) || "",
           formData: canonicalValue(patch.formData)
-        });
+        };
+        if (patch.note !== undefined) cachePatch.note = String(patch.note);
+        await updateCachedBooking(source, bookingId, cachePatch);
         await refreshAfterMutation(source, range);
         return { ...payload, localId: id, resourceId: Number(patch.resourceId) };
       });

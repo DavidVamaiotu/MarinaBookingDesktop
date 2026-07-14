@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Marina Booking API
  * Description: Secure REST API bridge for Booking Calendar / Booking Calendar Pro.
- * Version: 1.0.5
+ * Version: 1.0.6
  * Requires Plugins: booking
  * Author: Marina Park
  * Requires at least: 6.5
@@ -16,7 +16,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 final class Marina_Booking_API {
 
-	const VERSION   = '1.0.5';
+	const VERSION   = '1.0.6';
 	const SCHEMA_VERSION = '1.0.2';
 	const IDEMPOTENCY_TABLE_SUFFIX = 'marina_booking_api_idempotency';
 	const NAMESPACE = 'marina-booking/v1';
@@ -1027,6 +1027,7 @@ final class Marina_Booking_API {
 		if ( is_wp_error( $form_data ) ) {
 			return $form_data;
 		}
+		$form_data = self::form_data_with_date_times( $form_data, $dates );
 
 		$params = self::booking_save_params( $payload );
 		if ( is_wp_error( $params ) ) {
@@ -1083,10 +1084,15 @@ final class Marina_Booking_API {
 			}
 		}
 
-		$resource_value = isset( $payload['resource_id'] ) ? $payload['resource_id'] : $existing['booking_type'];
+		$existing_resource_id = (int) $existing['booking_type'];
+		$resource_value = isset( $payload['resource_id'] ) ? $payload['resource_id'] : $existing_resource_id;
 		$resource_id = self::validated_resource_id( $resource_value );
 		if ( is_wp_error( $resource_id ) ) {
 			return $resource_id;
+		}
+		$is_resource_move = $resource_id !== $existing_resource_id;
+		if ( $is_resource_move && ! function_exists( 'wpbc__sql__change_booking_resource_for_booking' ) ) {
+			return new WP_Error( 'marina_booking_api_resource_move_unavailable', 'The installed Booking Calendar version cannot move bookings between resources.', array( 'status' => 503 ) );
 		}
 
 		$dates = self::normalize_dates( isset( $payload['dates'] ) ? $payload['dates'] : array() );
@@ -1098,6 +1104,7 @@ final class Marina_Booking_API {
 		if ( is_wp_error( $form_data ) ) {
 			return $form_data;
 		}
+		$form_data = self::form_data_with_date_times( $form_data, $dates );
 
 		$params = self::booking_save_params( $payload );
 		if ( is_wp_error( $params ) ) {
@@ -1107,20 +1114,74 @@ final class Marina_Booking_API {
 		$params['sync_gid'] = $existing_external_id;
 		$params['is_edit_booking'] = array(
 			'booking_id'   => $booking_id,
-			'booking_type' => (int) $existing['booking_type'],
+			'booking_type' => $existing_resource_id,
 		);
 
 		if ( ! array_key_exists( 'approved', $payload ) ) {
 			$params['is_approve_booking'] = self::booking_is_approved( $booking_id ) ? 1 : 0;
 		}
 
-		$result = wpbc_api_booking_add_new( $dates, $form_data, $resource_id, $params );
+		// The developer edit helper always resolves the booking's current resource from
+		// its hash. Save the proposed dates/form against that current resource first,
+		// then use Booking Calendar's native resource-move SQL helper to rewrite every
+		// form-field suffix and booking_type together. Passing the destination here
+		// would tag fields for the new resource while saving the booking on the old one.
+		global $wpdb;
+		$wpdb->query( 'START TRANSACTION' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+
+		$result = wpbc_api_booking_add_new( $dates, $form_data, $existing_resource_id, $params );
 		if ( is_wp_error( $result ) ) {
+			$wpdb->query( 'ROLLBACK' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
 			return new WP_Error( 'marina_booking_api_update_failed', $result->get_error_message(), array( 'status' => 422 ) );
 		}
 
+		if ( $is_resource_move ) {
+			$move_result = wpbc__sql__change_booking_resource_for_booking( $booking_id, $resource_id );
+			if ( ! is_array( $move_result ) || empty( $move_result[0] ) ) {
+				$wpdb->query( 'ROLLBACK' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+				$message = is_array( $move_result ) && isset( $move_result[1] ) ? wp_strip_all_tags( (string) $move_result[1] ) : 'Booking Calendar could not move the booking to the requested resource.';
+				return new WP_Error( 'marina_booking_api_resource_move_failed', $message, array( 'status' => 409 ) );
+			}
+		}
+
+		// A resource change must never recalculate or replace the pricing note. Save the
+		// exact note currently submitted by the app (or preserve the server note when
+		// older clients omit it) after Booking Calendar has finished the edit/move.
+		$current_note = isset( $existing['remark'] ) ? (string) $existing['remark'] : '';
+		$note = array_key_exists( 'note', $payload ) ? self::sanitize_text( $payload['note'], 4000 ) : $current_note;
+		$booking_table = $wpdb->prefix . 'booking';
+		$note_updated = $wpdb->update( $booking_table, array( 'remark' => $note ), array( 'booking_id' => $booking_id ), array( '%s' ), array( '%d' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+		if ( false === $note_updated ) {
+			$wpdb->query( 'ROLLBACK' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+			return new WP_Error( 'marina_booking_api_note_failed', 'Could not preserve the booking note while editing.', array( 'status' => 500 ) );
+		}
+
+		$saved = self::raw_booking( $booking_id );
+		$saved_form = ! is_wp_error( $saved ) && isset( $saved['form'] ) ? (string) $saved['form'] : '';
+		$name_suffix_ok = ! isset( $form_data['name'] ) || preg_match( '/(?:^|~)[^^~]*\^name' . preg_quote( (string) $resource_id, '/' ) . '\^/', $saved_form );
+		if (
+			is_wp_error( $saved )
+			|| (int) $saved['booking_type'] !== $resource_id
+			|| ( isset( $saved['remark'] ) ? (string) $saved['remark'] : '' ) !== $note
+			|| ! $name_suffix_ok
+			|| ! self::saved_dates_match( $booking_id, $dates )
+		) {
+			$wpdb->query( 'ROLLBACK' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+			return new WP_Error( 'marina_booking_api_edit_verification_failed', 'Booking Calendar did not persist the complete resource edit; all changes were rolled back.', array( 'status' => 500 ) );
+		}
+
+		$wpdb->query( 'COMMIT' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		if ( array_key_exists( 'note', $payload ) && ! hash_equals( $current_note, $note ) ) {
+			do_action(
+				'wpbc_set_booking_note',
+				array( 'booking_id' => $booking_id, 'note' => $note ),
+				array( 'after_action_result' => true )
+			);
+			self::audit( 'booking_note_updated', $booking_id );
+		}
+
 		self::audit( 'booking_updated', $booking_id );
-		return self::response( array( 'booking_id' => (int) $result, 'updated' => true ) );
+		return self::response( array( 'booking_id' => (int) $result, 'resource_id' => $resource_id, 'note' => $note, 'updated' => true ) );
 	}
 
 	/**
@@ -2277,6 +2338,64 @@ final class Marina_Booking_API {
 		}
 
 		return array_values( array_unique( $normalized ) );
+	}
+
+	/**
+	 * Make the explicit date-time boundaries authoritative for Booking Calendar's
+	 * start/end fields. Its developer helper converts the date list to date-only
+	 * values and reconstructs partial days from these form fields.
+	 *
+	 * @param array $form_data Normalized form fields.
+	 * @param array $dates Normalized ISO dates/date-times.
+	 * @return array
+	 */
+	private static function form_data_with_date_times( $form_data, $dates ) {
+		$sorted = $dates;
+		sort( $sorted, SORT_STRING );
+		if ( count( $sorted ) < 2 ) {
+			return $form_data;
+		}
+
+		$first = $sorted[0];
+		$last  = $sorted[ count( $sorted ) - 1 ];
+		if ( 19 === strlen( $first ) && 19 === strlen( $last ) ) {
+			$form_data['starttime'] = array( 'value' => substr( $first, 11, 5 ), 'type' => 'text' );
+			$form_data['endtime']   = array( 'value' => substr( $last, 11, 5 ), 'type' => 'text' );
+		}
+		return $form_data;
+	}
+
+	/**
+	 * Verify the exact date rows before committing an edit. This prevents an HTTP
+	 * success when an installed Booking Calendar version silently drops partial-day
+	 * times. Single-calendar-day time slots can use vendor-specific row shapes and
+	 * are therefore verified by their form fields instead.
+	 *
+	 * @param int   $booking_id Booking ID.
+	 * @param array $dates Proposed normalized dates/date-times.
+	 * @return bool
+	 */
+	private static function saved_dates_match( $booking_id, $dates ) {
+		$expected = array_map(
+			function( $date ) {
+				return 10 === strlen( $date ) ? $date . ' 00:00:00' : $date;
+			},
+			$dates
+		);
+		$expected_days = array_unique( array_map( function( $date ) { return substr( $date, 0, 10 ); }, $expected ) );
+		if ( count( $expected_days ) < 2 ) {
+			return true;
+		}
+
+		$saved = array_map(
+			function( $row ) {
+				return isset( $row['date'] ) ? (string) $row['date'] : '';
+			},
+			self::booking_dates( $booking_id )
+		);
+		sort( $expected, SORT_STRING );
+		sort( $saved, SORT_STRING );
+		return $expected === $saved;
 	}
 
 	/**

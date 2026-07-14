@@ -2130,11 +2130,7 @@ $("#detailsForm").addEventListener("submit", async (event) => {
     requireValidQuote(await window.marina.quoteBooking({ resourceId, dates, formData, bookingFormType, mode: "full", forceFresh: true, source }));
     if (source !== activeWorkspace || selectedBookingId !== booking.localId) throw workspaceChangedError();
     closeBookingOverlays();
-    await runApiAction("editBooking", booking.localId, { resourceId, dates, formData, bookingFormType, sendEmail: Boolean(form.elements.sendEmail.checked), source });
-    if (form.elements.note.value !== booking.note) {
-      try { await runApiAction("setNote", booking.localId, { note: form.elements.note.value, source }); }
-      catch { return; }
-    }
+    await runApiAction("editBooking", booking.localId, { resourceId, dates, formData, bookingFormType, note: form.elements.note.value, sendEmail: Boolean(form.elements.sendEmail.checked), source });
   } catch (error) { showError(error); } });
 });
 $("#detailsForm").addEventListener("input", (event) => {

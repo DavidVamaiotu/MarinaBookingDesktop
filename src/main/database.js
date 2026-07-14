@@ -419,6 +419,7 @@ class BookingDatabase {
           dates: apiDates,
           form_data: booking.formData,
           booking_form_type: patch.bookingFormType || "",
+          note: booking.note,
           send_email: Boolean(patch.sendEmail),
           availability_dates: apiDates
         };
