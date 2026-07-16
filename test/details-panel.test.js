@@ -10,13 +10,32 @@ const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
 const stylesSource = fs.readFileSync(path.join(__dirname, "..", "styles.css"), "utf8");
 
 test("reservation editor groups fields under clear Romanian sections", () => {
-  for (const label of ["Rezervare", "Client", "Notă internă", "Plată avans", "Salvare"]) {
+  for (const label of ["Sejur / Rezervare", "Client", "Sumar preț", "Notă internă", "Plată avans", "Acțiuni"]) {
     assert.match(indexSource, new RegExp(label));
   }
   for (const technicalLabel of ["Status sincronizare", "ID local", "Istoric sincronizare"]) assert.doesNotMatch(indexSource, new RegExp(technicalLabel));
   assert.match(indexSource, /Nume de familie<input name="secondname"/);
   assert.match(indexSource, /Unitate de cazare<select name="resourceId"/);
-  assert.ok(indexSource.indexOf("<h3>Client</h3>") < indexSource.indexOf("<h3>Rezervare</h3>"));
+  assert.ok(indexSource.indexOf("<h3>Client</h3>") < indexSource.indexOf("<h3>Sejur / Rezervare</h3>"));
+});
+
+test("reservation editor price summary is read-only and follows the existing note", () => {
+  assert.match(indexSource, /id="detailsPriceTotal">—/);
+  assert.match(indexSource, /id="detailsPriceDeposit">—/);
+  assert.match(indexSource, /id="detailsPriceBalance">—/);
+  assert.match(appSource, /function renderDetailsPrice\(note\)/);
+  assert.match(appSource, /const pricing = PricingNote\.parse\(note\)/);
+  assert.match(appSource, /renderDetailsPrice\(form\.elements\.note\.value\)/);
+  assert.match(appSource, /event\.target\.matches\('\[name="note"\]'\)\) renderDetailsPrice\(event\.target\.value\)/);
+  assert.doesNotMatch(indexSource, /name="detailsPrice/);
+});
+
+test("reservation editor reference styling remains scoped and responsive", () => {
+  assert.match(stylesSource, /#detailsPanel\{width:min\(448px,46vw\)/);
+  assert.match(stylesSource, /#detailsPanel \.details-section\{[^}]*border:1px solid #e2dfd8[^}]*border-radius:8px/);
+  assert.match(stylesSource, /#detailsPanel \.field-grid\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
+  assert.match(stylesSource, /@media\(max-width:620px\)\{[\s\S]*#detailsPanel\{inset:0;width:100vw/);
+  assert.match(stylesSource, /#detailsPanel \.details-save\{[^}]*background:linear-gradient/);
 });
 
 test("reservation editor reports invalid fields instead of letting native validation fail silently", () => {
@@ -60,7 +79,7 @@ test("reservation details expose only requested conditional WordPress fields", (
   assert.match(appSource, /name === "pat-suplimentar"\) return activeWorkspace === "rooms"/);
   assert.match(appSource, /isElectricityField\(name\)\) return activeWorkspace === "camping"/);
   assert.match(appSource, /BookingFields\.matchesName\(name, "car_plates"/);
-  assert.match(appSource, /const clientFields = vehicleField \? \[vehicleField\] : \[\]/);
+  assert.match(appSource, /activeWorkspace === "camping"[\s\S]*\[\["car_plates", \{ value: "", type: "text" \}\]\]/);
   assert.match(appSource, /\["Energie_electrica", \{ value: "no", type: "checkbox" \}\]/);
   assert.match(indexSource, /Telefon<input name="phone"/);
   assert.match(indexSource, /id="clientExtraFields"/);
@@ -125,6 +144,20 @@ test("payment popup trusts the WordPress snapshot and shows its note and databas
   assert.match(appSource, /paymentDatabaseDeposit"\)\.textContent = databaseDeposit === null/);
   assert.match(appSource, /runApiAction\("updateDeposit", booking\.localId, \{ deposit: amount, total, note, source: activeWorkspace \}/);
   assert.doesNotMatch(appSource, /if \(!current\) throw new Error\("Nota rezervării nu conține un Cost valid\."\)/);
+});
+
+test("payment popup uses the dedicated responsive advancement layout", () => {
+  assert.match(indexSource, /class="payment-status-summary"/);
+  assert.match(indexSource, /id="paymentTotalValue"/);
+  assert.match(indexSource, /id="paymentDepositValue"/);
+  assert.match(indexSource, /id="paymentBalanceValue"/);
+  assert.match(indexSource, /id="paymentBalanceBadge"/);
+  assert.match(stylesSource, /\.payment-status-summary\{display:none\}/);
+  assert.match(stylesSource, /#paymentDialog::backdrop\{[^}]*backdrop-filter:blur\(5px\)/);
+  assert.match(stylesSource, /\.payment-facts\{[^}]*grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/);
+  assert.match(stylesSource, /@media\(max-width:620px\)\{[\s\S]*\.payment-facts\{grid-template-columns:1fr/);
+  assert.match(appSource, /paymentTotalValue"\)\.textContent = amountsAvailable/);
+  assert.match(appSource, /paymentBalanceBadge"\)\.textContent = amountsAvailable/);
 });
 
 test("payment email refreshes the current deposit before sending when no deposit change is queued", () => {

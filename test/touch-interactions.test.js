@@ -89,6 +89,21 @@ test("high resolution horizontal scrolling preserves the full trackpad delta", (
   assert.doesNotMatch(wheelSource, /Math\.min\(Math\.max\(horizontal/);
 });
 
+test("availability timeline swipes switch one month without blocking vertical scrolling", () => {
+  const swipeSource = appSource.slice(appSource.indexOf("function beginAvailabilitySwipe"), appSource.indexOf("function renderCommands"));
+  assert.match(appSource, /const AVAILABILITY_SWIPE_THRESHOLD = 50/);
+  assert.match(swipeSource, /Math\.abs\(deltaX\) > Math\.abs\(deltaY\) \? "horizontal" : "vertical"/);
+  assert.match(swipeSource, /if \(availabilitySwipeState\.mode === "horizontal"\) event\.preventDefault\(\)/);
+  assert.match(swipeSource, /setAvailabilityMonth\(addMonths\(availabilityMonth, deltaX < 0 \? 1 : -1\)\)/);
+  assert.match(swipeSource, /function beginAvailabilitySwipe\(event\) \{\s*if \(!availabilityViewActive \|\| event\.touches\.length !== 1\)[\s\S]*?return;\s*}\s*event\.stopPropagation\(\)/);
+  assert.match(swipeSource, /function moveAvailabilitySwipe\(event\) \{\s*if \(!availabilitySwipeState \|\| event\.touches\.length !== 1\)[\s\S]*?return;\s*}\s*event\.stopPropagation\(\)/);
+  assert.match(swipeSource, /const swipe = availabilitySwipeState;\s*availabilitySwipeState = null;\s*if \(!swipe\) return;\s*event\.stopPropagation\(\)/);
+  assert.match(appSource, /availabilityGrid\.addEventListener\("touchstart", beginAvailabilitySwipe, \{ passive: true \}\)/);
+  assert.match(appSource, /availabilityGrid\.addEventListener\("touchmove", moveAvailabilitySwipe, \{ passive: false \}\)/);
+  assert.match(appSource, /availabilityGrid\.addEventListener\("touchcancel", cancelAvailabilitySwipe, \{ passive: true \}\)/);
+  assert.match(stylesSource, /\.availability-grid\{[^}]*touch-action:pan-y/);
+});
+
 test("each stacked reservation lane receives its own compact date strip", () => {
   const dateGridSource = appSource.slice(appSource.indexOf("function updateDateGridBackground"), appSource.indexOf("function assignLanes"));
   assert.match(dateGridSource, /const rowHeight = LANE_HEIGHT/);
@@ -106,6 +121,10 @@ test("phone and Fold timelines keep enough width for complete room identifiers",
   assert.match(stylesSource, /\.timeline-unit strong\{overflow:visible;font-size:10px;text-overflow:clip;white-space:normal;overflow-wrap:anywhere\}/);
   assert.match(stylesSource, /@media\(min-width:600px\) and \(max-width:1100px\)[\s\S]*--timeline-unit-width:180px/);
   assert.match(appSource, /label\.title = row\.resource\.title/);
+});
+
+test("the new reservation dialog is centered on mobile without changing other dialogs", () => {
+  assert.match(stylesSource, /@media\(max-width:900px\)[\s\S]*#createDialog\{inset:50% auto auto 50%;width:calc\(100vw - 24px\);height:auto;max-height:calc\(100dvh - 24px\);margin:0;border:1px solid var\(--line\);border-radius:10px;transform:translate\(-50%,-50%\)\}/);
 });
 
 test("desktop and mobile shells fit the physical viewport without page scrollbars", () => {

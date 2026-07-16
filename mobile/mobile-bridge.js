@@ -9,6 +9,7 @@ import * as PricingNote from "../src/shared/pricing-note.js";
 import * as PaymentRequest from "../src/shared/payment-request.js";
 
 const AutoUpdater = registerPlugin("AutoUpdater");
+const BackgroundQueue = registerPlugin("BackgroundQueue");
 
 if (!window.marina) {
   const SOURCES = new Set(["rooms", "camping"]);
@@ -26,6 +27,8 @@ if (!window.marina) {
   const paymentQueuesRecovered = new Set();
   const sourceConnections = new Map();
   let actionHistoryWrite = Promise.resolve();
+  let backgroundQueueActivities = 0;
+  let backgroundQueueTransition = Promise.resolve();
   const MOBILE_REFRESH_INTERVAL_MS = 5 * 60_000;
   const MOBILE_RECONNECT_INTERVAL_MS = 15_000;
 
@@ -139,6 +142,18 @@ if (!window.marina) {
   }
 
   async function trackedMutation({ source, key, type, bookingLocalId = null, resourceId = null, payload = {} }, task) {
+    if (bookingLocalId) {
+      let actions = (await allActionHistory())[source] || [];
+      if (actions.some((item) => item.bookingLocalId === bookingLocalId && ["deposit_update", "payment_request"].includes(item.type) && ["queued", "sending"].includes(item.status))) {
+        await processPaymentQueue(source);
+        actions = (await allActionHistory())[source] || [];
+      }
+      const unresolved = actions.find((item) => item.bookingLocalId === bookingLocalId && (
+        ["failed", "conflict", "needs_attention"].includes(item.status)
+        || (["deposit_update", "payment_request"].includes(item.type) && ["queued", "sending"].includes(item.status))
+      ));
+      if (unresolved) throw previousMutationError(unresolved);
+    }
     const timestamp = new Date().toISOString();
     const action = {
       id: crypto.randomUUID(),
@@ -156,34 +171,50 @@ if (!window.marina) {
       completedAt: null
     };
     await addAction(source, action);
-    return serializeMutation(key, async () => {
-      await updateAction(source, action.id, { status: "sending", attempts: 1, updatedAt: new Date().toISOString() });
-      try {
-        const result = await task();
-        const completedAt = new Date().toISOString();
-        await updateAction(source, action.id, {
-          bookingLocalId: result?.localId || action.bookingLocalId,
-          resourceId: result?.resourceId ?? action.resourceId,
-          status: "synced",
-          result: canonicalValue(result ?? null),
-          errorCode: null,
-          errorMessage: null,
-          updatedAt: completedAt,
-          completedAt
-        });
-        return result;
-      } catch (error) {
+    let started = false;
+    try {
+      return await serializeMutation(key, async () => {
+        started = true;
+        await updateAction(source, action.id, { status: "sending", attempts: 1, updatedAt: new Date().toISOString() });
+        try {
+          const result = await task();
+          const completedAt = new Date().toISOString();
+          await updateAction(source, action.id, {
+            bookingLocalId: result?.localId || action.bookingLocalId,
+            resourceId: result?.resourceId ?? action.resourceId,
+            status: "synced",
+            result: canonicalValue(result ?? null),
+            errorCode: null,
+            errorMessage: null,
+            updatedAt: completedAt,
+            completedAt
+          });
+          return result;
+        } catch (error) {
+          const completedAt = new Date().toISOString();
+          await updateAction(source, action.id, {
+            status: "failed",
+            errorCode: error.code || "request_failed",
+            errorMessage: error.message || "Acțiunea nu a putut fi finalizată.",
+            updatedAt: completedAt,
+            completedAt
+          });
+          throw error;
+        }
+      });
+    } catch (error) {
+      if (!started) {
         const completedAt = new Date().toISOString();
         await updateAction(source, action.id, {
           status: "failed",
-          errorCode: error.code || "request_failed",
-          errorMessage: error.message || "Acțiunea nu a putut fi finalizată.",
+          errorCode: error.code || "previous_action_failed",
+          errorMessage: error.message || "Acțiunea anterioară pentru acest client nu a fost finalizată.",
           updatedAt: completedAt,
           completedAt
         });
-        throw error;
       }
-    });
+      throw error;
+    }
   }
 
   function normalizeBaseUrl(value) {
@@ -514,9 +545,46 @@ if (!window.marina) {
     return value;
   }
 
+  function previousMutationError(previous) {
+    const previousCode = previous?.errorCode || previous?.code || "request_failed";
+    return Object.assign(new Error("Acțiunea anterioară pentru acest client nu a fost finalizată cu succes. Rezolvă sau elimină eroarea înainte de o altă modificare."), {
+      code: "previous_action_failed",
+      permanent: true,
+      previousActionId: previous?.id || null,
+      previousErrorCode: previousCode
+    });
+  }
+
+  function transitionBackgroundQueue(operation) {
+    backgroundQueueTransition = backgroundQueueTransition
+      .then(operation, operation)
+      .catch((error) => console.error("Background queue service failed:", error));
+    return backgroundQueueTransition;
+  }
+
+  async function runWithBackgroundQueue(task) {
+    if (Capacitor.getPlatform() !== "android") return task();
+    backgroundQueueActivities += 1;
+    if (backgroundQueueActivities === 1) {
+      await transitionBackgroundQueue(() => BackgroundQueue.start());
+    } else {
+      await backgroundQueueTransition;
+    }
+    try {
+      return await task();
+    } finally {
+      backgroundQueueActivities = Math.max(0, backgroundQueueActivities - 1);
+      if (backgroundQueueActivities === 0) {
+        await transitionBackgroundQueue(() => backgroundQueueActivities === 0 ? BackgroundQueue.stop() : undefined);
+      }
+    }
+  }
+
   async function serializeMutation(key, task) {
     const previous = mutationChains.get(key);
-    const operation = (previous ? previous.catch(() => {}) : Promise.resolve()).then(task);
+    const operation = previous
+      ? previous.then(() => runWithBackgroundQueue(task), (error) => { throw previousMutationError(error); })
+      : Promise.resolve().then(() => runWithBackgroundQueue(task));
     mutationChains.set(key, operation);
     try { return await operation; }
     finally { if (mutationChains.get(key) === operation) mutationChains.delete(key); }
@@ -548,6 +616,65 @@ if (!window.marina) {
   async function cachedBooking(source, bookingId) {
     const cache = await allCache();
     return (cache[source]?.bookings || []).find((booking) => Number(booking.serverId) === Number(bookingId)) || null;
+  }
+
+  function sameCanonicalValue(left, right) {
+    return JSON.stringify(canonicalValue(left)) === JSON.stringify(canonicalValue(right));
+  }
+
+  function normalizedEditDates(dates) {
+    return [...new Set((dates || []).map((date) => String(date).slice(0, 10)))].sort();
+  }
+
+  function preparedBookingFormData(booking) {
+    if (!booking) return {};
+    try { return BookingFields.prepareFormData(booking.formData, booking.resourceId); }
+    catch (error) {
+      if (error.code === "empty_form_data") return {};
+      throw error;
+    }
+  }
+
+  function captureEditIntent(baseBooking, patch, requestedFormData) {
+    const baseFormData = preparedBookingFormData(baseBooking);
+    const changedFormData = {};
+    const removedFormFields = [];
+    const fieldNames = new Set([...Object.keys(baseFormData), ...Object.keys(requestedFormData)]);
+    for (const name of fieldNames) {
+      const baseHasField = Object.prototype.hasOwnProperty.call(baseFormData, name);
+      const requestedHasField = Object.prototype.hasOwnProperty.call(requestedFormData, name);
+      if (baseHasField === requestedHasField && sameCanonicalValue(baseFormData[name], requestedFormData[name])) continue;
+      if (requestedHasField) changedFormData[name] = requestedFormData[name];
+      else removedFormFields.push(name);
+    }
+    return {
+      resourceChanged: !baseBooking || Number(patch.resourceId) !== Number(baseBooking.resourceId),
+      datesChanged: !baseBooking || !sameCanonicalValue(normalizedEditDates(patch.dates), normalizedEditDates(baseBooking.dates)),
+      noteChanged: patch.note !== undefined && (!baseBooking || String(patch.note) !== String(baseBooking.note || "")),
+      changedFormData,
+      removedFormFields
+    };
+  }
+
+  async function rebaseEditPatch(source, latestBooking, patch, intent) {
+    if (!latestBooking) throw Object.assign(new Error("Rezervarea nu mai există în datele locale actualizate."), { code: "client_cache_missing", permanent: true });
+    const formData = { ...preparedBookingFormData(latestBooking) };
+    for (const name of intent.removedFormFields) delete formData[name];
+    for (const [name, field] of Object.entries(intent.changedFormData)) formData[name] = field;
+    const resourceId = intent.resourceChanged ? Number(patch.resourceId) : Number(latestBooking.resourceId);
+    const dates = intent.datesChanged ? normalizedEditDates(patch.dates) : normalizedEditDates(latestBooking.dates);
+    const cache = await allCache();
+    const resource = (cache[source]?.resources || []).find((item) => Number(item.id) === resourceId);
+    const bookingFormType = resource?.defaultForm || (resourceId === Number(patch.resourceId) ? patch.bookingFormType || "" : "");
+    const rebased = {
+      ...patch,
+      resourceId,
+      dates,
+      formData: BookingFields.prepareFormData(formData, null),
+      bookingFormType
+    };
+    if (patch.note !== undefined) rebased.note = intent.noteChanged ? String(patch.note) : String(latestBooking.note || "");
+    return rebased;
   }
 
   async function mutate(id, path, body, source = currentSource) {
@@ -588,6 +715,9 @@ if (!window.marina) {
   }
 
   async function enqueuePaymentAction(source, booking, type, payload, dependsOnCommandId = null) {
+    const existing = (await allActionHistory())[source] || [];
+    const unresolved = existing.find((item) => item.bookingLocalId === booking.localId && ["failed", "conflict", "needs_attention"].includes(item.status));
+    if (unresolved) throw previousMutationError(unresolved);
     const timestamp = new Date().toISOString();
     const action = { id: crypto.randomUUID(), type, bookingLocalId: booking.localId, resourceId: booking.resourceId, payload: canonicalValue(payload), dependsOnCommandId, status: "queued", attempts: 0, result: null, errorCode: null, errorMessage: null, createdAt: timestamp, updatedAt: timestamp, completedAt: null };
     await addAction(source, action);
@@ -619,25 +749,39 @@ if (!window.marina) {
           return true;
         });
         if (!action) return;
-        const temporaryFailure = await serializeMutation(`booking:${source}:${action.bookingLocalId}`, async () => {
-          await updateAction(source, action.id, { status: "sending", attempts: Number(action.attempts || 0) + 1, updatedAt: new Date().toISOString() });
-          try {
-            const bookingId = serverId(action.bookingLocalId);
-            const depositAction = action.type === "deposit_update";
-            const path = depositAction ? `/bookings/${bookingId}/deposit` : `/bookings/${bookingId}/payment-request`;
-            const body = depositAction ? { deposit: action.payload.deposit, total: action.payload.total, expected_note: action.payload.expected_note } : PaymentRequest.validate(action.payload);
-            const { payload: response } = await request(path, { method: depositAction ? "PATCH" : "POST", body, idempotencyKey: action.id, expectedApiBaseUrl: normalizeBaseUrl(settings.apiBaseUrl) }, null, source);
-            if (depositAction) await updateCachedBooking(source, bookingId, { note: response.note || action.payload.new_note });
+        let started = false;
+        try {
+          await serializeMutation(`booking:${source}:${action.bookingLocalId}`, async () => {
+            started = true;
+            await updateAction(source, action.id, { status: "sending", attempts: Number(action.attempts || 0) + 1, updatedAt: new Date().toISOString() });
+            try {
+              const bookingId = serverId(action.bookingLocalId);
+              const depositAction = action.type === "deposit_update";
+              const path = depositAction ? `/bookings/${bookingId}/deposit` : `/bookings/${bookingId}/payment-request`;
+              const body = depositAction ? { deposit: action.payload.deposit, total: action.payload.total, expected_note: action.payload.expected_note } : PaymentRequest.validate(action.payload);
+              const { payload: response } = await request(path, { method: depositAction ? "PATCH" : "POST", body, idempotencyKey: action.id, expectedApiBaseUrl: normalizeBaseUrl(settings.apiBaseUrl) }, null, source);
+              if (depositAction) await updateCachedBooking(source, bookingId, { note: response.note || action.payload.new_note });
+              const completedAt = new Date().toISOString();
+              await updateAction(source, action.id, { status: "synced", result: canonicalValue(response), errorCode: null, errorMessage: null, completedAt, updatedAt: completedAt });
+            } catch (error) {
+              const temporary = error.temporary || error.rateLimited || error.unknownOutcome;
+              await updateAction(source, action.id, { status: temporary ? "queued" : (error.status === 409 || error.conflict ? "conflict" : "failed"), errorCode: error.code || "request_failed", errorMessage: error.message || "Acțiunea nu a putut fi finalizată.", updatedAt: new Date().toISOString() });
+              throw error;
+            }
+          });
+        } catch (error) {
+          if (!started) {
             const completedAt = new Date().toISOString();
-            await updateAction(source, action.id, { status: "synced", result: canonicalValue(response), errorCode: null, errorMessage: null, completedAt, updatedAt: completedAt });
-            return false;
-          } catch (error) {
-            const temporary = error.temporary || error.rateLimited || error.unknownOutcome;
-            await updateAction(source, action.id, { status: temporary ? "queued" : (error.status === 409 || error.conflict ? "conflict" : "failed"), errorCode: error.code || "request_failed", errorMessage: error.message || "Acțiunea nu a putut fi finalizată.", updatedAt: new Date().toISOString() });
-            return Boolean(temporary);
+            await updateAction(source, action.id, {
+              status: "failed",
+              errorCode: error.code || "previous_action_failed",
+              errorMessage: error.message || "Acțiunea anterioară pentru acest client nu a fost finalizată.",
+              completedAt,
+              updatedAt: completedAt
+            });
           }
-        });
-        if (temporaryFailure) return;
+          return;
+        }
       }
     })();
     paymentQueuePumps.set(source, operation);
@@ -777,33 +921,34 @@ if (!window.marina) {
       const source = SOURCES.has(patch?.source) ? patch.source : currentSource;
       const range = currentRange;
       const bookingId = serverId(id);
-      const formData = BookingFields.prepareFormData(patch.formData, patch.sourceResourceId);
-      const mutationPatch = { ...patch, formData };
+      const requestedFormData = BookingFields.prepareFormData(patch.formData, patch.sourceResourceId);
+      const editIntent = cachedBooking(source, bookingId).then((baseBooking) => captureEditIntent(baseBooking, patch, requestedFormData));
+      const mutationPatch = { ...patch, formData: requestedFormData };
       return trackedMutation({ source, key: `booking:${source}:${bookingId}`, type: "edit", bookingLocalId: id, resourceId: patch.resourceId, payload: mutationPatch }, async () => {
+        const rebasedPatch = await rebaseEditPatch(source, await cachedBooking(source, bookingId), patch, await editIntent);
         const expectedApiBaseUrl = normalizeBaseUrl((await allSettings())[source]?.apiBaseUrl);
         const stayTimes = source === "camping" ? { checkIn: "14:00:01", checkOut: "12:00:02" } : {};
-        const apiDates = window.BookingCalendar.toStayDateTimes(patch.dates, stayTimes);
-        await requireAvailability(source, expectedApiBaseUrl, patch.resourceId, apiDates, bookingId);
-        const editBody = { resource_id: patch.resourceId, dates: apiDates, form_data: canonicalValue(formData), booking_form_type: patch.bookingFormType || "", send_email: Boolean(patch.sendEmail) };
-        if (patch.note !== undefined) editBody.note = String(patch.note);
+        const apiDates = window.BookingCalendar.toStayDateTimes(rebasedPatch.dates, stayTimes);
+        await requireAvailability(source, expectedApiBaseUrl, rebasedPatch.resourceId, apiDates, bookingId);
+        const editBody = { resource_id: rebasedPatch.resourceId, dates: apiDates, form_data: canonicalValue(rebasedPatch.formData), booking_form_type: rebasedPatch.bookingFormType || "", send_email: Boolean(rebasedPatch.sendEmail) };
+        if (rebasedPatch.note !== undefined) editBody.note = String(rebasedPatch.note);
         const { payload } = await request(`/bookings/${bookingId}`, {
           method: "PATCH",
           idempotencyKey: crypto.randomUUID(),
           expectedApiBaseUrl,
           body: editBody
         }, null, source);
-        const normalizedDates = [...new Set(patch.dates.map((date) => String(date).slice(0, 10)))].sort();
         const cachePatch = {
-          resourceId: Number(patch.resourceId),
-          dates: normalizedDates,
-          startDate: normalizedDates[0] || "",
-          endDate: normalizedDates.at(-1) || "",
-          formData: canonicalValue(formData)
+          resourceId: Number(rebasedPatch.resourceId),
+          dates: rebasedPatch.dates,
+          startDate: rebasedPatch.dates[0] || "",
+          endDate: rebasedPatch.dates.at(-1) || "",
+          formData: canonicalValue(rebasedPatch.formData)
         };
-        if (patch.note !== undefined) cachePatch.note = String(patch.note);
+        if (rebasedPatch.note !== undefined) cachePatch.note = String(rebasedPatch.note);
         await updateCachedBooking(source, bookingId, cachePatch);
         await refreshAfterMutation(source, range);
-        return { ...payload, localId: id, resourceId: Number(patch.resourceId) };
+        return { ...payload, localId: id, resourceId: Number(rebasedPatch.resourceId) };
       });
     },
     setStatus: (id, patch) => mutate(id, "/status", { status: patch.status, send_email: Boolean(patch.sendEmail) }, SOURCES.has(patch?.source) ? patch.source : currentSource),
@@ -818,6 +963,8 @@ if (!window.marina) {
       const booking = await cachedBooking(source, serverId(id));
       if (!booking) throw new Error("Rezervarea nu există în cache.");
       const actions = (await allActionHistory())[source] || [];
+      const unresolved = actions.find((item) => item.bookingLocalId === id && ["failed", "conflict", "needs_attention"].includes(item.status));
+      if (unresolved) throw previousMutationError(unresolved);
       if (actions.some((item) => item.bookingLocalId === id && ["deposit_update", "payment_request"].includes(item.type) && ["queued", "sending", "failed", "conflict", "needs_attention"].includes(item.status))) throw new Error("Există deja o operație de plată nesincronizată pentru această rezervare.");
       const authoritativeNote = String(input.note ?? booking.note ?? "");
       const pricing = PricingNote.parse(authoritativeNote);
@@ -837,6 +984,8 @@ if (!window.marina) {
       if (actions.some((item) => item.bookingLocalId === id && item.type === "payment_request" && ["queued", "sending", "failed", "conflict", "needs_attention"].includes(item.status))) throw new Error("Există deja un email de plată nesincronizat.");
       const unresolvedDeposit = actions.find((item) => item.bookingLocalId === id && item.type === "deposit_update" && ["queued", "sending", "failed", "conflict", "needs_attention"].includes(item.status));
       if (unresolvedDeposit && ["failed", "conflict", "needs_attention"].includes(unresolvedDeposit.status)) throw new Error("Actualizarea avansului are o problemă. Reîncearcă sau anulează modificarea înainte de trimiterea emailului.");
+      const unresolved = actions.find((item) => item.bookingLocalId === id && !["deposit_update", "payment_request"].includes(item.type) && ["failed", "conflict", "needs_attention"].includes(item.status));
+      if (unresolved) throw previousMutationError(unresolved);
       const dependency = unresolvedDeposit;
       return enqueuePaymentAction(source, booking, "payment_request", paymentRequest, dependency?.id || null);
     },

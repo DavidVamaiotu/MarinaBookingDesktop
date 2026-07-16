@@ -42,21 +42,21 @@
             <div class="timeline-scale" id="timelineScale"></div>
             <div class="guest-timeline" id="guestTimeline"></div>
           </div>
+          <section class="availability-page" id="availabilityPage" aria-labelledby="availabilityTitle" hidden>
+            <header class="availability-header">
+              <div><p>Vizualizare lunară</p><h1 id="availabilityTitle">Disponibilitate camere</h1></div>
+              <div class="availability-actions">
+                <button class="secondary compact" id="closeAvailability" type="button">Calendar rezervări</button>
+                <span class="availability-legend"><i></i>Ocupat</span>
+                <button id="availabilityPrev" type="button" aria-label="Luna precedentă">‹</button>
+                <strong id="availabilityMonthLabel"></strong>
+                <button id="availabilityNext" type="button" aria-label="Luna următoare">›</button>
+              </div>
+            </header>
+            <div class="availability-grid" id="availabilityGrid" role="table" aria-label="Disponibilitatea camerelor pe zile"></div>
+          </section>
         </div>
       </div>
-      <section class="availability-page" id="availabilityPage" aria-labelledby="availabilityTitle" hidden>
-        <header class="availability-header">
-          <div><p>Vizualizare lunară</p><h1 id="availabilityTitle">Disponibilitate camere</h1></div>
-          <div class="availability-actions">
-            <button class="secondary compact" id="closeAvailability" type="button">Calendar rezervări</button>
-            <span class="availability-legend"><i></i>Ocupat</span>
-            <button id="availabilityPrev" type="button" aria-label="Luna precedentă">‹</button>
-            <strong id="availabilityMonthLabel"></strong>
-            <button id="availabilityNext" type="button" aria-label="Luna următoare">›</button>
-          </div>
-        </header>
-        <div class="availability-grid" id="availabilityGrid" role="table" aria-label="Disponibilitatea camerelor pe zile"></div>
-      </section>
     </section>
   </main>
 
@@ -85,8 +85,11 @@
   <aside class="side-panel" id="detailsPanel" aria-labelledby="detailsTitle" hidden>
     <header><div><p>Detalii rezervare</p><h2 id="detailsTitle">Rezervare</h2></div><button class="icon" data-close="detailsPanel" type="button" aria-label="Închide detaliile">×</button></header>
     <form id="detailsForm" class="panel-form" novalidate>
-      <section class="details-section">
-        <header><h3>Client</h3></header>
+      <section class="details-section details-client-section">
+        <header>
+          <svg class="details-section-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7" r="3.25"></circle><path d="M5.5 19.25v-1.5a6.5 6.5 0 0 1 13 0v1.5z"></path></svg>
+          <h3>Client</h3>
+        </header>
         <div class="field-grid">
           <label>Prenume<input name="name" autocomplete="given-name" required></label>
           <label>Nume de familie<input name="secondname" autocomplete="family-name"></label>
@@ -96,8 +99,11 @@
         <div class="field-grid" id="clientExtraFields"></div>
       </section>
 
-      <section class="details-section">
-        <header><h3>Rezervare</h3></header>
+      <section class="details-section details-stay-section">
+        <header>
+          <svg class="details-section-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5.5" width="16" height="14" rx="1.5"></rect><path d="M8 3.5v4M16 3.5v4M4 9.5h16"></path></svg>
+          <h3>Sejur / Rezervare</h3>
+        </header>
         <label>Unitate de cazare<select name="resourceId" required></select></label>
         <div class="field-grid">
           <label>Data sosirii <small>Check-in la 15:00</small><input name="start" type="date" required></label>
@@ -108,14 +114,32 @@
         <div class="field-grid" id="reservationExtraFields"></div>
       </section>
 
-      <section class="details-section">
-        <header><h3>Notă internă</h3></header>
+      <section class="details-section details-price-section" aria-labelledby="detailsPriceTitle">
+        <header>
+          <svg class="details-section-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12.25 12.25 4H19v6.75L10.75 19 4 12.25z"></path><circle cx="15.7" cy="7.4" r="1.15"></circle></svg>
+          <h3 id="detailsPriceTitle">Sumar preț</h3>
+        </header>
+        <div class="details-price-summary" id="detailsPriceSummary" aria-live="polite">
+          <div><span>Cost total</span><strong id="detailsPriceTotal">—</strong></div>
+          <div><span>Depozit</span><strong id="detailsPriceDeposit">—</strong></div>
+          <div class="details-price-balance"><span>Rest de plată</span><strong id="detailsPriceBalance">—</strong></div>
+        </div>
+      </section>
+
+      <section class="details-section details-note-section">
+        <header>
+          <svg class="details-section-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3.5" width="14" height="17" rx="1.5"></rect><path d="M8.5 8h7M8.5 11.5h7M8.5 15h5"></path></svg>
+          <h3>Notă internă</h3>
+        </header>
         <label class="sr-only" for="detailsNote">Notă internă</label>
         <textarea id="detailsNote" name="note" rows="4" placeholder="Adaugă o observație pentru echipă…"></textarea>
       </section>
 
       <section class="details-section details-actions-section">
-        <header><h3>Salvare</h3></header>
+        <header>
+          <svg class="details-section-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 19 6v5.25c0 4.25-2.85 7.65-7 9.25-4.15-1.6-7-5-7-9.25V6l7-2.5z"></path><path d="m9 12 2 2 4-4"></path></svg>
+          <h3>Acțiuni</h3>
+        </header>
         <label class="check email-option"><input name="sendEmail" type="checkbox"><span>Trimite notificări pentru acțiuni</span></label>
         <button class="primary details-save" type="submit">Salvează rezervarea</button>
         <div class="details-reservation-actions" aria-label="Acțiuni rezervare">
@@ -129,18 +153,26 @@
   <dialog id="paymentDialog" aria-labelledby="paymentDialogTitle">
     <form id="paymentForm" class="panel-form" method="dialog">
       <header><div><p>Plată rezervare</p><h2 id="paymentDialogTitle">Avans</h2></div><button class="icon" id="closePaymentDialog" type="button" aria-label="Închide">×</button></header>
-      <section class="payment-section" id="paymentSection">
-        <header><h3>Plată avans</h3><p>Suma salvată este cea folosită de linkul de plată WordPress.</p></header>
-        <div class="payment-facts" id="paymentFacts"></div>
+      <section class="payment-section" id="paymentSection" aria-label="Plată avans">
+        <div class="payment-status-summary" aria-live="polite">
+          <span class="payment-badge payment-badge-paid"><span class="payment-badge-icon" aria-hidden="true">✓</span><span id="paymentPaidBadge">Avans plătit</span></span>
+          <span class="payment-badge payment-badge-balance"><span class="payment-badge-icon" aria-hidden="true">▤</span><span>Rest de plată: <strong id="paymentBalanceBadge">—</strong></span></span>
+        </div>
+        <div class="payment-facts" id="paymentFacts">
+          <div class="payment-fact payment-fact-total"><span class="payment-fact-icon" aria-hidden="true">▤</span><span><strong>Cost total</strong><b id="paymentTotalValue">—</b></span></div>
+          <div class="payment-fact payment-fact-paid"><span class="payment-fact-icon" aria-hidden="true">✓</span><span><strong>Avans plătit</strong><b id="paymentDepositValue">—</b></span></div>
+          <div class="payment-fact payment-fact-balance"><span class="payment-fact-icon" aria-hidden="true">▭</span><span><strong>Rest de plată</strong><b id="paymentBalanceValue">—</b></span></div>
+          <p class="payment-unavailable" id="paymentUnavailable" hidden>Valorile plății nu au putut fi verificate.</p>
+        </div>
         <div class="payment-verification">
-          <div><strong id="paymentNoteLabel">Notă rezervare</strong><pre id="paymentNoteText">Se verifică…</pre></div>
-          <div><strong>Avans în baza de date WordPress</strong><span id="paymentDatabaseDeposit">Se verifică…</span></div>
+          <div class="payment-note-card"><span class="payment-verification-icon" aria-hidden="true">i</span><span><strong id="paymentNoteLabel">Notă rezervare</strong><pre id="paymentNoteText">Se verifică…</pre></span></div>
+          <div class="payment-database-card"><span class="payment-verification-icon" aria-hidden="true">≡</span><span><strong>Avans în baza de date WordPress</strong><b id="paymentDatabaseDeposit">Se verifică…</b></span></div>
         </div>
         <div class="field-grid payment-controls">
           <label>Avans nou<input name="depositAmount" type="number" inputmode="decimal" min="0" step="0.01"></label>
-          <button class="secondary" id="saveDeposit" type="button">Salvează avansul</button>
+          <button class="secondary" id="saveDeposit" type="button"><span aria-hidden="true">▣</span>Salvează avansul</button>
         </div>
-        <button class="primary" id="sendPaymentRequest" type="button">Trimite emailul de plată</button>
+        <button class="primary" id="sendPaymentRequest" type="button"><span aria-hidden="true">✉</span>Trimite emailul de plată</button>
         <p class="payment-status" id="paymentStatus"></p>
       </section>
     </form>

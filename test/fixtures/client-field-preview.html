@@ -8,30 +8,27 @@
 </head>
 <body>
   <aside class="side-panel" id="detailsPanel" aria-labelledby="detailsTitle">
-    <header><div><p>Detalii rezervare</p><h2 id="detailsTitle">Client sintetic</h2></div></header>
+    <header><div><p>Detalii rezervare</p><h2 id="detailsTitle">Ana Popescu</h2></div><button class="icon" type="button" aria-label="Închide">×</button></header>
     <form class="panel-form" id="detailsForm">
-      <section class="details-section">
-        <header><h3>Rezervare</h3></header>
+      <section class="details-section details-client-section">
+        <header><svg class="details-section-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7" r="3.25"></circle><path d="M5.5 19.25v-1.5a6.5 6.5 0 0 1 13 0v1.5z"></path></svg><h3>Client</h3></header>
+        <div class="field-grid">
+          <label>Prenume<input id="firstName" value="Ana"></label>
+          <label>Nume de familie<input id="lastName" value="Popescu"></label>
+          <label class="span-2">Email<input id="email" type="email" value="ana@example.test"></label>
+          <label class="span-2">Telefon<input id="phone" type="tel" value="+40 712 345 678"></label>
+        </div>
+      </section>
+      <section class="details-section details-stay-section">
+        <header><svg class="details-section-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5.5" width="16" height="14" rx="1.5"></rect><path d="M8 3.5v4M16 3.5v4M4 9.5h16"></path></svg><h3>Sejur / Rezervare</h3></header>
         <label>Unitate de cazare<select><option>Camera 4</option></select></label>
-        <div class="field-grid">
-          <label>Data sosirii <small>Check-in la 15:00</small><input type="date" value="2026-07-18"></label>
-          <label>Data plecării <small>Check-out la 12:00</small><input type="date" value="2026-07-21"></label>
-          <label>Număr adulți<input type="number" value="2"></label>
-          <label>Număr copii<input type="number" value="0"></label>
-        </div>
+        <div class="field-grid"><label>Data sosirii <small>Check-in la 15:00</small><input type="date" value="2026-07-18"></label><label>Data plecării <small>Check-out la 12:00</small><input type="date" value="2026-07-21"></label><label>Număr adulți<input type="number" value="2"></label><label>Număr copii<input type="number" value="0"></label></div>
+        <label class="check"><input type="checkbox"> Pat suplimentar (da/nu)</label>
+        <label>Observații client<textarea rows="2">Booking</textarea></label>
       </section>
-      <section class="details-section">
-        <header><h3>Client</h3></header>
-        <div class="field-grid">
-          <label>Prenume<input id="firstName"></label>
-          <label>Nume de familie<input id="lastName"></label>
-          <label class="span-2">Email<input id="email" type="email"></label>
-          <label class="span-2">Telefon<input id="phone" type="tel"></label>
-        </div>
-      </section>
-      <section class="details-section"><header><h3>Notă internă</h3></header><textarea rows="4" placeholder="Adaugă o observație pentru echipă…"></textarea></section>
-      <section class="details-section payment-section"><header><h3>Plată avans</h3></header><div class="payment-facts"><span><strong>Cost</strong>1.200 lei</span><span><strong>Avans</strong>400 lei</span><span><strong>Rest</strong>800 lei</span></div></section>
-      <section class="details-section details-actions-section"><header><h3>Salvare</h3></header><button class="primary details-save" type="button">Salvează rezervarea</button><label class="check email-option"><input type="checkbox"><span>Trimite notificare clientului la salvare.</span></label></section>
+      <section class="details-section details-price-section"><header><svg class="details-section-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12.25 12.25 4H19v6.75L10.75 19 4 12.25z"></path><circle cx="15.7" cy="7.4" r="1.15"></circle></svg><h3>Sumar preț</h3></header><div class="details-price-summary"><div><span>Cost total</span><strong>1.200 RON</strong></div><div><span>Depozit</span><strong>400 RON</strong></div><div class="details-price-balance"><span>Rest de plată</span><strong>800 RON</strong></div></div></section>
+      <section class="details-section details-note-section"><header><svg class="details-section-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3.5" width="14" height="17" rx="1.5"></rect><path d="M8.5 8h7M8.5 11.5h7M8.5 15h5"></path></svg><h3>Notă internă</h3></header><textarea rows="4">Cost total: 1200 RON, Depozit: 400 RON, Rest: 800 RON</textarea></section>
+      <section class="details-section details-actions-section"><header><svg class="details-section-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5 19 6v5.25c0 4.25-2.85 7.65-7 9.25-4.15-1.6-7-5-7-9.25V6l7-2.5z"></path><path d="m9 12 2 2 4-4"></path></svg><h3>Acțiuni</h3></header><label class="check email-option"><input type="checkbox"><span>Trimite notificări pentru acțiuni</span></label><button class="primary details-save" type="button">Salvează rezervarea</button><div class="details-reservation-actions"><button class="secondary" type="button">Pune în așteptare</button><button class="danger subtle" type="button">Gunoi</button></div></section>
     </form>
   </aside>
   <script src="../../src/shared/booking-fields.js"></script>

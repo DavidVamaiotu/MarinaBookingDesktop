@@ -40,5 +40,14 @@
     return { start: iso(start), end: iso(end), dates, rows };
   }
 
-  return { buildMonth, monthStart };
+  function fromDate(view, value) {
+    const cutoff = iso(value instanceof Date ? value : new Date(`${String(value).slice(0, 10)}T00:00:00Z`));
+    return {
+      ...view,
+      dates: view.dates.filter(({ date }) => date >= cutoff),
+      rows: view.rows.map((row) => ({ ...row, cells: row.cells.filter(({ date }) => date >= cutoff) }))
+    };
+  }
+
+  return { buildMonth, fromDate, monthStart };
 });

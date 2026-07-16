@@ -31,6 +31,7 @@ const MIN_CAMERA_SCALE = 1;
 const MAX_CAMERA_SCALE = 2;
 const PINCH_DIRECTION_THRESHOLD = 8;
 const CAMERA_PAN_THRESHOLD = 4;
+const AVAILABILITY_SWIPE_THRESHOLD = 50;
 const ROW_BASE = 44;
 const LANE_HEIGHT = 34;
 const DATE_GRID_CHUNK_DAYS = 28;
@@ -47,6 +48,7 @@ let duplicateWorkspace = null;
 let availabilityMonth = monthStart(todayIso());
 let availabilityViewActive = false;
 let availabilityVisited = false;
+let availabilitySwipeState = null;
 
 function updateWorkspaceUi() {
   const camping = activeWorkspace === "camping";
@@ -65,6 +67,7 @@ function updateWorkspaceUi() {
 
 async function switchWorkspace(source) {
   if (!new Set(["rooms", "camping"]).has(source) || source === activeWorkspace) return;
+  cancelDrag();
   const switchId = ++workspaceSwitchId;
   clearTimeout(availabilityTimer);
   clearTimeout(quoteTimer);
@@ -998,10 +1001,12 @@ function availabilityCellLabel(cell) {
 
 function renderAvailabilityTimeline() {
   if (!availabilityViewActive) return;
-  const view = AvailabilityTimeline.buildMonth(state.resources, state.bookings, availabilityMonth);
+  const fullView = AvailabilityTimeline.buildMonth(state.resources, state.bookings, availabilityMonth);
+  const view = AvailabilityTimeline.fromDate(fullView, todayIso());
   const weekdayInitials = ["D", "L", "M", "M", "J", "V", "S"];
   availabilityGrid.style.setProperty("--availability-days", view.dates.length);
   $("#availabilityMonthLabel").textContent = formatMonth(availabilityMonth);
+  $("#availabilityPrev").disabled = availabilityMonth <= monthStart(todayIso());
   const header = `<div class="availability-corner" role="columnheader">Cameră</div><div class="availability-month" role="columnheader">${escapeHtml(formatMonth(availabilityMonth))}</div>`;
   const rows = view.rows.map((row) => `<div class="availability-room" role="rowheader">${escapeHtml(row.title)}</div>${view.dates.map((date) => `<div class="availability-date-number" role="cell" aria-label="Ziua ${date.day}">${date.day}</div>`).join("")}${row.cells.map((cell, index) => {
     const am = cell.am === "available" ? "available" : "occupied";
@@ -1012,14 +1017,16 @@ function renderAvailabilityTimeline() {
 }
 
 function setAvailabilityView(show) {
+  cancelDrag();
+  availabilitySwipeState = null;
   const wasActive = availabilityViewActive;
   availabilityViewActive = Boolean(show) && activeWorkspace === "rooms";
   if (availabilityViewActive && !availabilityVisited) {
-    availabilityMonth = monthStart(focusMonth);
+    availabilityMonth = monthStart(todayIso());
     availabilityVisited = true;
   }
   timelineHeader.hidden = availabilityViewActive;
-  cameraViewport.hidden = availabilityViewActive;
+  timelineShell.hidden = availabilityViewActive;
   availabilityPage.hidden = !availabilityViewActive;
   timelinePanel.setAttribute("aria-labelledby", availabilityViewActive ? "availabilityTitle" : "timelineTitle");
   openAvailability.setAttribute("aria-pressed", String(availabilityViewActive));
@@ -1034,7 +1041,9 @@ function setAvailabilityView(show) {
 }
 
 async function setAvailabilityMonth(month) {
-  availabilityMonth = monthStart(month);
+  const requestedMonth = monthStart(month);
+  const currentMonth = monthStart(todayIso());
+  availabilityMonth = requestedMonth < currentMonth ? currentMonth : requestedMonth;
   renderAvailabilityTimeline();
   const targetEnd = addDays(addMonths(availabilityMonth, 1), -1);
   currentRange();
@@ -1043,6 +1052,51 @@ async function setAvailabilityMonth(month) {
   currentRange();
   await refreshRange({ force: false, quiet: false });
   renderAvailabilityTimeline();
+}
+
+function beginAvailabilitySwipe(event) {
+  if (!availabilityViewActive || event.touches.length !== 1) {
+    availabilitySwipeState = null;
+    return;
+  }
+  event.stopPropagation();
+  availabilitySwipeState = {
+    startX: event.touches[0].clientX,
+    startY: event.touches[0].clientY,
+    mode: null
+  };
+}
+
+function moveAvailabilitySwipe(event) {
+  if (!availabilitySwipeState || event.touches.length !== 1) {
+    if (event.touches.length !== 1) availabilitySwipeState = null;
+    return;
+  }
+  event.stopPropagation();
+  const deltaX = event.touches[0].clientX - availabilitySwipeState.startX;
+  const deltaY = event.touches[0].clientY - availabilitySwipeState.startY;
+  if (!availabilitySwipeState.mode && Math.max(Math.abs(deltaX), Math.abs(deltaY)) >= PINCH_DIRECTION_THRESHOLD) {
+    availabilitySwipeState.mode = Math.abs(deltaX) > Math.abs(deltaY) ? "horizontal" : "vertical";
+  }
+  if (availabilitySwipeState.mode === "horizontal") event.preventDefault();
+}
+
+function endAvailabilitySwipe(event) {
+  const swipe = availabilitySwipeState;
+  availabilitySwipeState = null;
+  if (!swipe) return;
+  event.stopPropagation();
+  if (swipe.mode !== "horizontal" || event.changedTouches.length !== 1) return;
+  const deltaX = event.changedTouches[0].clientX - swipe.startX;
+  const deltaY = event.changedTouches[0].clientY - swipe.startY;
+  if (Math.abs(deltaX) < AVAILABILITY_SWIPE_THRESHOLD || Math.abs(deltaX) <= Math.abs(deltaY)) return;
+  void setAvailabilityMonth(addMonths(availabilityMonth, deltaX < 0 ? 1 : -1));
+}
+
+function cancelAvailabilitySwipe(event) {
+  if (!availabilitySwipeState) return;
+  event.stopPropagation();
+  availabilitySwipeState = null;
 }
 
 function renderCommands() {
@@ -1388,6 +1442,7 @@ function selectCreateDate(value) {
 }
 
 function openCreate({ resourceId, date } = {}) {
+  cancelDrag();
   const form = $("#createForm");
   clearTimeout(availabilityTimer);
   clearTimeout(quoteTimer);
@@ -1426,6 +1481,7 @@ function openCreate({ resourceId, date } = {}) {
 }
 
 function openDuplicate(booking) {
+  cancelDrag();
   const resources = state.resources.filter((resource) => resource.active !== false && Number(resource.id) !== Number(booking.resourceId));
   if (!resources.length) {
     showError(new Error("Nu există un alt spațiu activ pentru această rezervare."));
@@ -1769,6 +1825,7 @@ window.addEventListener("marina:back", (event) => {
 });
 
 function populateDetails(booking, reset = true) {
+  cancelDrag();
   selectedBookingId = booking.localId;
   selectedBookingView = "edit";
   bookingMenu.hidden = true;
@@ -1790,7 +1847,11 @@ function populateDetails(booking, reset = true) {
     const extraFields = Object.entries(booking.formData || {}).filter(([name, field]) => editableDetailsField(name, field));
     const vehicleFields = extraFields.filter(([name]) => isVehiclePlateField(name));
     const vehicleField = vehicleFields.find(([, field]) => String(field?.value || "").trim()) || vehicleFields[0];
-    const clientFields = vehicleField ? [vehicleField] : [];
+    const clientFields = vehicleField
+      ? [vehicleField]
+      : activeWorkspace === "camping"
+        ? [["car_plates", { value: "", type: "text" }]]
+        : [];
     const optionFields = extraFields.filter(([name, field]) => !isVehiclePlateField(name) && !isElectricityField(name) && !BookingFields.isDetailsField(name, field));
     const electricityFields = extraFields.filter(([name]) => isElectricityField(name));
     if (activeWorkspace === "camping") optionFields.push(electricityFields.find(([, field]) => String(field?.value || "").trim()) || electricityFields[0] || ["Energie_electrica", { value: "no", type: "checkbox" }]);
@@ -1806,13 +1867,26 @@ function populateDetails(booking, reset = true) {
     form.elements.end.value = booking.dates[booking.dates.length - 1];
     form.elements.note.value = booking.note || "";
   }
+  renderDetailsPrice(form.elements.note.value);
   const clientName = [BookingFields.value(booking, "firstName"), BookingFields.value(booking, "lastName")].filter(Boolean).join(" ").trim();
   $("#detailsTitle").textContent = clientName || `Rezervarea ${booking.serverId || "locală"}`;
   renderCommands();
   detailsPanel.hidden = false;
 }
 
+function renderDetailsPrice(note) {
+  const pricing = PricingNote.parse(note);
+  const values = pricing
+    ? [pricing.total, pricing.deposit, pricing.balance].map((value) => `${PricingNote.formatAmount(value)} RON`)
+    : ["—", "—", "—"];
+  $("#detailsPriceTotal").textContent = values[0];
+  $("#detailsPriceDeposit").textContent = values[1];
+  $("#detailsPriceBalance").textContent = values[2];
+  $("#detailsPriceSummary").classList.toggle("is-unavailable", !pricing);
+}
+
 function populatePaymentDialog(booking, reset = true) {
+  cancelDrag();
   selectedBookingId = booking.localId;
   selectedBookingView = "payment";
   bookingMenu.hidden = true;
@@ -1873,9 +1947,14 @@ function renderPaymentSection(booking, reset = false) {
   const amountsAvailable = [total, deposit, balance].every((value) => value !== null);
   const authoritativePaymentAvailable = Boolean(snapshot && snapshotTotal !== null && databaseDeposit !== null);
   if (reset || document.activeElement !== form.elements.depositAmount) form.elements.depositAmount.value = Number.isFinite(deposit) ? String(deposit) : "";
-  $("#paymentFacts").innerHTML = amountsAvailable
-    ? `<span><strong>Cost</strong>${escapeHtml(PricingNote.formatAmount(total))} lei</span><span><strong>Avans</strong>${escapeHtml(PricingNote.formatAmount(deposit))} lei</span><span><strong>Rest</strong>${escapeHtml(PricingNote.formatAmount(balance))} lei</span>`
-    : '<span class="payment-unavailable">Valorile plății nu au putut fi verificate.</span>';
+  $("#paymentFacts").classList.toggle("is-unavailable", !amountsAvailable);
+  $("#paymentUnavailable").hidden = amountsAvailable;
+  $("#paymentTotalValue").textContent = amountsAvailable ? `${PricingNote.formatAmount(total)} lei` : "—";
+  $("#paymentDepositValue").textContent = amountsAvailable ? `${PricingNote.formatAmount(deposit)} lei` : "—";
+  $("#paymentBalanceValue").textContent = amountsAvailable ? `${PricingNote.formatAmount(balance)} lei` : "—";
+  $("#paymentBalanceBadge").textContent = amountsAvailable ? `${PricingNote.formatAmount(balance)} lei` : "—";
+  $("#paymentPaidBadge").textContent = deposit > 0 ? "Avans plătit" : "Avans neplătit";
+  $("#paymentPaidBadge").closest(".payment-badge").classList.toggle("is-unpaid", !(deposit > 0));
   $("#paymentNoteLabel").textContent = serverNoteAvailable ? "Notă WordPress" : "Notă locală";
   $("#paymentNoteText").textContent = note || "Nu există notă.";
   $("#paymentDatabaseDeposit").textContent = databaseDeposit === null ? "Se verifică…" : `${PricingNote.formatAmount(databaseDeposit)} lei`;
@@ -2042,6 +2121,10 @@ function updateDraggedBar() {
 
 function moveDrag(event) {
   if (!dragState || event.pointerId !== dragState.pointerId) return;
+  if (event.buttons !== undefined && (event.buttons & 1) !== 1) {
+    cancelDrag();
+    return;
+  }
   autoScrollDuringDrag(event);
   const delta = Math.round(((event.clientX - dragState.clientX) / cameraScale + timelineScrollLeft() - dragState.scrollLeft) / dayWidth);
   if (delta === dragState.lastDelta) return;
@@ -2063,12 +2146,21 @@ function moveDrag(event) {
   dragState.bar?.closest(".timeline-row")?.classList.add("is-drop-target");
 }
 
-async function endDrag(event) {
-  if (!dragState || event.pointerId !== dragState.pointerId) return;
+function releaseDragState() {
   const completed = dragState;
   dragState = null;
-  completed.bar.classList.remove("is-dragging");
-  completed.bar.closest(".timeline-row")?.classList.remove("is-drop-target");
+  if (!completed) return null;
+  try {
+    if (completed.bar?.hasPointerCapture?.(completed.pointerId)) completed.bar.releasePointerCapture(completed.pointerId);
+  } catch {}
+  completed.bar?.classList.remove("is-dragging");
+  completed.bar?.closest(".timeline-row")?.classList.remove("is-drop-target");
+  return completed;
+}
+
+async function endDrag(event) {
+  if (!dragState || event.pointerId !== dragState.pointerId) return;
+  const completed = releaseDragState();
   if (!completed.changed) return;
   lastDragEndedAt = performance.now();
   const source = activeWorkspace;
@@ -2091,15 +2183,12 @@ async function endDrag(event) {
 }
 
 function cancelDrag() {
-  if (!dragState) return;
-  const cancelled = dragState;
-  dragState = null;
+  const cancelled = releaseDragState();
+  if (!cancelled) return;
   cancelled.booking.dates = cancelled.originalDates;
   cancelled.booking.startDate = cancelled.originalDates[0];
   cancelled.booking.endDate = cancelled.originalDates[cancelled.originalDates.length - 1];
   cancelled.booking.syncState = cancelled.originalSyncState;
-  cancelled.bar?.classList.remove("is-dragging");
-  cancelled.bar?.closest(".timeline-row")?.classList.remove("is-drop-target");
   renderTimeline();
 }
 
@@ -2110,9 +2199,13 @@ cameraViewport.addEventListener("touchmove", moveTouchZoom, { passive: false });
 cameraViewport.addEventListener("touchend", endTouchZoom, { passive: true });
 cameraViewport.addEventListener("touchcancel", endTouchZoom, { passive: true });
 guestTimeline.addEventListener("pointerdown", beginDrag);
+guestTimeline.addEventListener("lostpointercapture", cancelDrag);
 document.addEventListener("pointermove", moveDrag);
 document.addEventListener("pointerup", endDrag);
 document.addEventListener("pointercancel", cancelDrag);
+document.addEventListener("visibilitychange", () => { if (document.hidden) cancelDrag(); });
+window.addEventListener("pagehide", cancelDrag);
+window.addEventListener("blur", cancelDrag);
 guestTimeline.addEventListener("click", (event) => {
   if (dragState || performance.now() - lastDragEndedAt < 250 || performance.now() - lastCameraPanEndedAt < 250) return;
   const bar = event.target.closest(".timeline-bar");
@@ -2132,6 +2225,10 @@ openAvailability.addEventListener("click", () => setAvailabilityView(!availabili
 $("#closeAvailability").addEventListener("click", () => setAvailabilityView(false));
 $("#availabilityPrev").addEventListener("click", () => { void setAvailabilityMonth(addMonths(availabilityMonth, -1)); });
 $("#availabilityNext").addEventListener("click", () => { void setAvailabilityMonth(addMonths(availabilityMonth, 1)); });
+availabilityGrid.addEventListener("touchstart", beginAvailabilitySwipe, { passive: true });
+availabilityGrid.addEventListener("touchmove", moveAvailabilitySwipe, { passive: false });
+availabilityGrid.addEventListener("touchend", endAvailabilitySwipe, { passive: true });
+availabilityGrid.addEventListener("touchcancel", cancelAvailabilitySwipe, { passive: true });
 $("#openCreate").addEventListener("click", () => openCreate());
 createDialog.addEventListener("close", () => {
   clearTimeout(availabilityTimer);
@@ -2246,6 +2343,7 @@ $("#detailsForm").addEventListener("submit", async (event) => {
   } catch (error) { showError(error); } });
 });
 $("#detailsForm").addEventListener("input", (event) => {
+  if (event.target.matches('[name="note"]')) renderDetailsPrice(event.target.value);
   if (event.target.matches('[name="resourceId"],[name="start"],[name="end"],[name="visitors"],[name="children"],[data-extra-field]')) void window.marina.clearQuoteCache();
 });
 
@@ -2460,6 +2558,7 @@ document.addEventListener("click", async (event) => {
 });
 
 $("#openSettings").addEventListener("click", async () => {
+  cancelDrag();
   const source = activeWorkspace;
   const settings = await window.marina.getSettings(source);
   if (source !== activeWorkspace) return;

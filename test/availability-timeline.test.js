@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { buildMonth } = require("../src/shared/availability-timeline");
+const { buildMonth, fromDate } = require("../src/shared/availability-timeline");
 
 const resources = [
   { id: 1, title: "Camera 1" },
@@ -40,6 +40,15 @@ test("month replacement changes day count instead of appending dates", () => {
   assert.equal(buildMonth(resources, [], "2028-02-01").dates.length, 29);
 });
 
+test("availability can exclude every date before today without changing the full month", () => {
+  const fullView = buildMonth(resources, bookings, "2026-08-01");
+  const futureView = fromDate(fullView, "2026-08-12");
+  assert.equal(fullView.dates.length, 31);
+  assert.equal(futureView.dates[0].date, "2026-08-12");
+  assert.equal(futureView.dates.length, 20);
+  assert.ok(futureView.rows.every((row) => row.cells.length === 20 && row.cells[0].date === "2026-08-12"));
+});
+
 test("availability page stays separate from the reservation timeline controls and interactions", () => {
   const root = path.join(__dirname, "..");
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
@@ -52,12 +61,17 @@ test("availability page stays separate from the reservation timeline controls an
   assert.match(html, /id="availabilityNext"/);
   assert.match(html, /id="closeAvailability"/);
   assert.match(app, /AvailabilityTimeline\.buildMonth\(state\.resources, state\.bookings, availabilityMonth\)/);
+  assert.match(app, /const view = AvailabilityTimeline\.fromDate\(fullView, todayIso\(\)\)/);
+  assert.match(app, /availabilityMonth = requestedMonth < currentMonth \? currentMonth : requestedMonth/);
   assert.match(app, /const weekdayInitials = \["D", "L", "M", "M", "J", "V", "S"\]/);
   assert.match(app, /class="availability-date-number"[^>]*>\$\{date\.day\}/);
   assert.match(app, /weekdayInitials\[view\.dates\[index\]\.weekday\]/);
-  assert.match(app, /cameraViewport\.hidden = availabilityViewActive/);
+  assert.match(html, /id="cameraContent"[\s\S]*id="availabilityPage"/);
+  assert.match(app, /timelineShell\.hidden = availabilityViewActive/);
   assert.match(app, /availabilityPage\.hidden = !availabilityViewActive/);
   assert.match(css, /\.availability-grid\{[^}]*overflow-x:hidden/);
+  assert.match(css, /\.is-mobile-app \.availability-cell\[data-am="available"\]\[data-pm="occupied"\]::before\{clip-path:polygon\(100% 0,100% 100%,0 100%\)\}/);
+  assert.match(css, /\.is-mobile-app \.availability-cell\[data-am="occupied"\]\[data-pm="available"\]::before\{clip-path:polygon\(0 0,100% 0,0 100%\)\}/);
   assert.match(mobileBuild, /availability-timeline\.js/);
   assert.doesNotMatch(app, /availabilityGrid\.addEventListener\("(?:pointerdown|dblclick)"/);
 });

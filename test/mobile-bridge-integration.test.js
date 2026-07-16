@@ -373,6 +373,116 @@ test("confirmed mobile mutations remain visible when their follow-up refresh fai
   assert.equal(states.at(-1).diagnostics.online, false);
 });
 
+test("mobile same-client edits wait and rebase onto the latest successful client data", async () => {
+  const requestBodies = [];
+  let releaseFirstEdit;
+  let markFirstEditStarted;
+  const firstEditStarted = new Promise((resolve) => { markFirstEditStarted = resolve; });
+  const firstEditGate = new Promise((resolve) => { releaseFirstEdit = resolve; });
+  const serverBooking = {
+    booking_id: 270,
+    resource_id: 27,
+    dates: [{ date: "2026-07-12" }, { date: "2026-07-13" }],
+    form_data: {
+      name: { value: "Ana", type: "text" },
+      phone: { value: "0700", type: "text" },
+      car_plates: { value: "B-01-OLD", type: "text" }
+    },
+    remark: "Inițial"
+  };
+  const harness = bridgeHarness(async (url, options = {}) => {
+    if (url.endsWith("/resources")) return jsonResponse({ resources: [{ id: 27, title: "Parcare rulotă", default_form: "rulota", active: true }] });
+    if (url.includes("/bookings?")) return jsonResponse({ bookings: [serverBooking] });
+    if (url.endsWith("/bookings/270") && options.method === "PATCH") {
+      const body = JSON.parse(options.body);
+      requestBodies.push(body);
+      if (requestBodies.length === 1) {
+        markFirstEditStarted();
+        await firstEditGate;
+      }
+      serverBooking.resource_id = body.resource_id;
+      serverBooking.dates = body.dates.map((date) => ({ date: String(date).slice(0, 10) }));
+      serverBooking.form_data = body.form_data;
+      serverBooking.remark = body.note;
+      return jsonResponse({ booking_id: 270, resource_id: body.resource_id, updated: true });
+    }
+    throw new Error(`Unexpected synthetic request: ${url} ${options.method || "GET"}`);
+  });
+  harness.marina.setSource("camping");
+  await harness.marina.saveSettings({ source: "camping", apiBaseUrl: "https://camping.example.test", username: "api-user", password: "secret", timezone: "Europe/Bucharest" });
+  await harness.marina.refresh({ start: "2026-07-01", end: "2026-07-31" });
+
+  const common = {
+    source: "camping",
+    sourceResourceId: 27,
+    resourceId: 27,
+    dates: ["2026-07-12", "2026-07-13"],
+    bookingFormType: "rulota",
+    note: "Inițial",
+    sendEmail: false
+  };
+  const first = harness.marina.editBooking("server:270", { ...common, formData: {
+    name: { value: "Ana", type: "text" },
+    phone: { value: "0700", type: "text" },
+    car_plates: { value: "B-01-NEW", type: "text" }
+  } });
+  await firstEditStarted;
+  const second = harness.marina.editBooking("server:270", { ...common, formData: {
+    name: { value: "Ana", type: "text" },
+    phone: { value: "0799", type: "text" },
+    car_plates: { value: "B-01-OLD", type: "text" }
+  } });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(requestBodies.length, 1);
+  releaseFirstEdit();
+  await Promise.all([first, second]);
+
+  assert.equal(requestBodies.length, 2);
+  assert.equal(requestBodies[0].form_data.car_plates.value, "B-01-NEW");
+  assert.equal(requestBodies[1].form_data.car_plates.value, "B-01-NEW");
+  assert.equal(requestBodies[1].form_data.phone.value, "0799");
+});
+
+test("mobile same-client actions never start after an earlier action fails", async () => {
+  let releaseNote;
+  let markNoteStarted;
+  const noteStarted = new Promise((resolve) => { markNoteStarted = resolve; });
+  const noteGate = new Promise((resolve) => { releaseNote = resolve; });
+  let statusCalls = 0;
+  const harness = await configuredBridge(async (url, options = {}) => {
+    if (url.endsWith("/bookings/55/note") && options.method === "POST") {
+      markNoteStarted();
+      await noteGate;
+      return jsonResponse({ code: "note_rejected", message: "Nota a fost respinsă." }, 400);
+    }
+    if (url.endsWith("/bookings/55/status") && options.method === "POST") {
+      statusCalls += 1;
+      return jsonResponse({ ok: true });
+    }
+    throw new Error(`Unexpected synthetic request: ${url} ${options.method || "GET"}`);
+  });
+
+  const first = harness.marina.setNote("server:55", { note: "Test" });
+  await noteStarted;
+  const second = harness.marina.setStatus("server:55", { status: "approved", sendEmail: false });
+  releaseNote();
+  const [firstResult, secondResult] = await Promise.allSettled([first, second]);
+
+  assert.equal(firstResult.status, "rejected");
+  assert.equal(firstResult.reason.code, "note_rejected");
+  assert.equal(secondResult.status, "rejected");
+  assert.equal(secondResult.reason.code, "previous_action_failed");
+  assert.equal(statusCalls, 0);
+  await assert.rejects(
+    harness.marina.setStatus("server:55", { status: "approved", sendEmail: false }),
+    (error) => error.code === "previous_action_failed"
+  );
+  assert.equal(statusCalls, 0);
+  assert.equal(await harness.marina.clearFailedCommands(), 2);
+  await harness.marina.setStatus("server:55", { status: "approved", sendEmail: false });
+  assert.equal(statusCalls, 1);
+});
+
 test("mobile action history persists every successful mutation and its lifecycle", async () => {
   const harness = await configuredBridge(async (url, options = {}) => {
     if (url.endsWith("/bookings/55/status") && options.method === "POST") return jsonResponse({ ok: true });
