@@ -74,12 +74,12 @@ test("changing API endpoints quarantines queued work without retargeting it", ()
   db.close();
 });
 
-test("resource refresh deactivates resources omitted by the authoritative response", () => {
+test("resource refresh deletes resources omitted by the authoritative response", () => {
   const db = new BookingDatabase(":memory:");
   db.replaceResources([{ id: 1, title: "Active" }, { id: 2, title: "Removed" }]);
   db.replaceResources([{ id: 1, title: "Active" }]);
   assert.deepEqual(db.listResources().map((resource) => resource.id), [1]);
-  assert.deepEqual(db.listResources({ includeInactive: true }).map((resource) => [resource.id, resource.active]), [[1, true], [2, false]]);
+  assert.deepEqual(db.listResources({ includeInactive: true }).map((resource) => [resource.id, resource.active]), [[1, true]]);
   db.close();
 });
 
@@ -143,7 +143,7 @@ test("safe queued edits and notes coalesce but creates never coalesce", () => {
   db.close();
 });
 
-test("optimistic status, note, trash and edit update local state immediately", () => {
+test("queued status, note, trash and edit keep the last confirmed local state", () => {
   const db = new BookingDatabase(":memory:");
   const { booking } = db.optimisticCreate(input());
   db.optimisticUpdate(booking.localId, { status: "approved" }, "status");
@@ -151,20 +151,21 @@ test("optimistic status, note, trash and edit update local state immediately", (
   db.optimisticUpdate(booking.localId, { trashed: true }, "trash");
   db.optimisticUpdate(booking.localId, { dates: ["2026-07-23", "2026-07-24"] }, "edit");
   const current = db.bookingRow(booking.localId);
-  assert.equal(current.status, "approved");
-  assert.equal(current.note, "Late arrival");
-  assert.equal(current.trashed, true);
-  assert.deepEqual(current.dates, ["2026-07-23", "2026-07-24"]);
+  assert.equal(current.status, "pending");
+  assert.equal(current.note, "");
+  assert.equal(current.trashed, false);
+  assert.deepEqual(current.dates, ["2026-07-20", "2026-07-21"]);
   assert.equal(current.syncState, "queued");
+  assert.equal(db.listBookings("2026-07-20", "2026-07-24").length, 0);
   db.close();
 });
 
-test("remote refresh does not overwrite an optimistic overlay", () => {
+test("remote refresh does not publish a queued local edit", () => {
   const db = new BookingDatabase(":memory:");
   db.upsertRemoteBooking({ serverId: 12, resourceId: 4, dates: ["2026-07-20"], formData: { name: { value: "Remote", type: "text" } }, status: "pending", note: "" });
   db.optimisticUpdate("server:12", { note: "Local note" }, "note");
   db.upsertRemoteBooking({ serverId: 12, resourceId: 4, dates: ["2026-07-20"], formData: { name: { value: "Remote", type: "text" } }, status: "approved", note: "Old note" });
-  assert.equal(db.bookingRow("server:12").note, "Local note");
+  assert.equal(db.bookingRow("server:12").note, "");
   db.close();
 });
 
@@ -203,14 +204,14 @@ test("loaded booking ranges are reused until their freshness window expires", ()
   db.close();
 });
 
-test("range reconciliation removes missing synced cache rows but preserves local work", () => {
+test("range reconciliation removes missing synced cache rows but preserves confirmed state with queued work", () => {
   const db = new BookingDatabase(":memory:");
   db.upsertRemoteBooking({ serverId: 12, resourceId: 4, dates: ["2026-07-20"], formData: { name: { value: "Old", type: "text" } }, status: "pending", note: "" });
   db.upsertRemoteBooking({ serverId: 13, resourceId: 4, dates: ["2026-07-21"], formData: { name: { value: "Keep", type: "text" } }, status: "pending", note: "" });
   db.optimisticUpdate("server:12", { note: "Local edit" }, "note");
   const removed = db.reconcileRemoteRange("2026-07-01", "2026-07-31", new Set());
   assert.equal(removed, 1);
-  assert.equal(db.bookingRow("server:12").note, "Local edit");
+  assert.equal(db.bookingRow("server:12").note, "");
   assert.equal(db.bookingRow("server:13"), null);
   db.close();
 });

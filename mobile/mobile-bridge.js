@@ -203,8 +203,7 @@ if (!window.marina) {
     await addAction(source, action);
     if (queuedPredecessor) {
       locallyOwnedActions.delete(action.id);
-      scheduleActionQueue(source, 0);
-      return { localId: action.bookingLocalId, resourceId: action.resourceId, commandId: action.id, queued: true };
+      return confirmedQueuedAction(source, action.id);
     }
     let started = false;
     try {
@@ -833,8 +832,33 @@ if (!window.marina) {
     const id = crypto.randomUUID();
     const action = { id, type, bookingLocalId: booking.localId, resourceId: booking.resourceId, payload: canonicalValue(payload), apiBaseUrl, idempotencyKey: id, dependsOnCommandId, status: "queued", attempts: 0, availableAt: timestamp, result: null, errorCode: null, errorMessage: null, createdAt: timestamp, updatedAt: timestamp, completedAt: null };
     await addAction(source, action);
-    void processPaymentQueue(source);
-    return action;
+    await confirmedQueuedAction(source, action.id);
+    const confirmed = ((await allActionHistory())[source] || []).find((item) => item.id === action.id);
+    return confirmed || action;
+  }
+
+  async function confirmedQueuedAction(source, actionId) {
+    await processPaymentQueue(source);
+    const actions = (await allActionHistory())[source] || [];
+    const action = actions.find((item) => item.id === actionId);
+    if (!action) throw Object.assign(new Error("Acțiunea nu mai există în istoricul local."), { code: "action_missing", permanent: true });
+    if (action.status === "synced") return action.result;
+    const dependency = action.dependsOnCommandId ? actions.find((item) => item.id === action.dependsOnCommandId) : null;
+    if (dependency && !["queued", "sending", "synced"].includes(dependency.status)) throw previousMutationError(dependency);
+    if (["failed", "conflict", "needs_attention", "cancelled"].includes(action.status)) {
+      throw Object.assign(new Error(action.errorMessage || "Operația nu a fost confirmată de WordPress."), {
+        code: action.errorCode || "request_failed",
+        conflict: action.status === "conflict",
+        permanent: true,
+        actionId: action.id
+      });
+    }
+    throw Object.assign(new Error(action.errorMessage || "Operația nu a fost confirmată de WordPress."), {
+      code: action.errorCode || "confirmation_pending",
+      temporary: true,
+      queued: true,
+      actionId: action.id
+    });
   }
 
   function scheduleActionQueue(source, delay = 0) {
@@ -1111,7 +1135,6 @@ if (!window.marina) {
       const authoritativeTotal = Number(input.total ?? pricing.total);
       if (!Number.isFinite(authoritativeTotal) || Math.abs(authoritativeTotal - pricing.total) > 0.005) throw new Error("Costul verificat nu corespunde notei WordPress.");
       const updated = PricingNote.update(authoritativeNote, Number(input.deposit), authoritativeTotal);
-      await updateCachedBooking(source, booking.serverId, { note: updated.note, syncState: "queued" });
       return enqueuePaymentAction(source, booking, "deposit_update", { deposit: updated.deposit, total: updated.total, expected_note: authoritativeNote, new_note: updated.note });
     },
     async requestPayment(id, input = {}) {

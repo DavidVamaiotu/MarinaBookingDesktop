@@ -191,21 +191,32 @@ test("mobile create clears Booking Calendar's automatic zero-price remark when n
 
 test("mobile persists deposit and payment-email commands in dependency order", async () => {
   const requests = [];
+  let releaseDeposit;
+  const depositGate = new Promise((resolve) => { releaseDeposit = resolve; });
   const booking = { booking_id: 88, resource_id: 4, dates: [{ date: "2026-07-20" }, { date: "2026-07-21" }], form_data: { email: { value: "client@example.com", type: "email" } }, remark: "Avans: 30, Cost: 100, Rest: 70" };
   const harness = await configuredBridge(async (url, options = {}) => {
     requests.push({ url, options });
     if (url.endsWith("/resources")) return jsonResponse({ resources: [{ id: 4, title: "Camera 4", active: true }] });
     if (url.includes("/bookings?")) return jsonResponse({ bookings: [booking] });
-    if (url.endsWith("/bookings/88/deposit")) return jsonResponse({ booking_id: 88, note: "Cost total: 100 RON, Depozit: 40 RON, Rest: 60 RON" });
+    if (url.endsWith("/bookings/88/deposit")) {
+      await depositGate;
+      return jsonResponse({ booking_id: 88, note: "Cost total: 100 RON, Depozit: 40 RON, Rest: 60 RON" });
+    }
     if (url.endsWith("/bookings/88/payment-request")) return jsonResponse({ booking_id: 88, sent: true });
     throw new Error(`Unexpected synthetic request: ${url}`);
   });
   await harness.marina.refresh({ start: "2026-07-01", end: "2026-07-31" });
-  const deposit = await harness.marina.updateDeposit("server:88", { deposit: 40 });
+  const depositSaving = harness.marina.updateDeposit("server:88", { deposit: 40 });
+  let pendingState;
+  do {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    pendingState = await harness.marina.bootstrap({ start: "2026-07-01", end: "2026-07-31" });
+  } while (!pendingState.commands.some((command) => command.type === "deposit_update" && command.status === "sending"));
   const payment = { reason: "aBcDeF", nights: 1, start_date: "2026-07-20", end_date: "2026-07-21" };
-  const email = await harness.marina.requestPayment("server:88", payment);
+  const emailSaving = harness.marina.requestPayment("server:88", payment);
+  releaseDeposit();
+  const [deposit, email] = await Promise.all([depositSaving, emailSaving]);
   assert.equal(email.dependsOnCommandId, deposit.id);
-  while (!requests.some((item) => item.url.endsWith("/bookings/88/payment-request"))) await new Promise((resolve) => setTimeout(resolve, 0));
   const mutations = requests.filter((item) => item.url.includes("/bookings/88/") && !item.url.endsWith("/payment"));
   assert.deepEqual(mutations.map((item) => item.url.split("/").at(-1)), ["deposit", "payment-request"]);
   assert.equal(mutations[0].options.headers["Idempotency-Key"], deposit.id);
@@ -253,13 +264,10 @@ test("mobile blocks payment email after a failed deposit and clear restores the 
     throw new Error(`Unexpected synthetic request: ${url}`);
   });
   await harness.marina.refresh({ start: "2026-07-01", end: "2026-07-31" });
-  await harness.marina.updateDeposit("server:188", { deposit: 40 });
-  let state;
-  do {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    state = await harness.marina.bootstrap({ start: "2026-07-01", end: "2026-07-31" });
-  } while (!state.commands.some((command) => command.type === "deposit_update" && command.status === "failed"));
-  assert.equal(state.bookings[0].note, "Cost total: 100 RON, Depozit: 40 RON, Rest: 60 RON");
+  await assert.rejects(harness.marina.updateDeposit("server:188", { deposit: 40 }), /Avans respins/);
+  let state = await harness.marina.bootstrap({ start: "2026-07-01", end: "2026-07-31" });
+  assert.ok(state.commands.some((command) => command.type === "deposit_update" && command.status === "failed"));
+  assert.equal(state.bookings[0].note, booking.remark);
   await assert.rejects(harness.marina.requestPayment("server:188", { reason: "aBcDeF", nights: 1, start_date: "2026-07-20", end_date: "2026-07-21" }), /Actualizarea avansului are o problemă/);
   assert.equal(paymentRequests, 0);
   assert.equal(await harness.marina.clearFailedCommands(), 1);
@@ -577,8 +585,10 @@ test("mobile retries an older queued action before sending a newer same-client c
     harness.marina.setNote("server:55", { note: "Older" }),
     (error) => error.code === "temporary" && error.temporary === true
   );
-  const newer = await harness.marina.setNote("server:55", { note: "Newer" });
-  assert.equal(newer.queued, true);
+  await assert.rejects(
+    harness.marina.setNote("server:55", { note: "Newer" }),
+    (error) => error.code === "confirmation_pending" && error.temporary === true && error.queued === true
+  );
 
   for (let attempt = 0; attempt < 100 && !notes.includes("Newer"); attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 10));

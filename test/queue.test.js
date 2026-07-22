@@ -38,12 +38,13 @@ test("unknown create reconciles by external_id and does not create twice", async
 
 test("availability rejection becomes a visible conflict", async () => {
   const db = new BookingDatabase(":memory:");
-  create(db);
+  const created = create(db);
   const queue = new CommandQueue({ database: db, api: { availability: async () => ({ available: false }) } });
   await queue.execute(db.readyCommands()[0]);
   assert.equal(db.commandRows()[0].status, "conflict");
   assert.equal(db.commandRows()[0].errorCode, "availability_conflict");
-  assert.equal(db.listBookings("2026-07-20", "2026-07-20")[0].syncState, "conflict");
+  assert.equal(db.bookingRow(created.booking.localId).syncState, "conflict");
+  assert.equal(db.listBookings("2026-07-20", "2026-07-20").length, 0);
   db.close();
 });
 
@@ -83,6 +84,28 @@ test("room edit checks the complete new stay and excludes its own server booking
   assert.equal(availabilityCall.options.excludeBookingId, 44);
   assert.equal(editCalls, 1);
   assert.equal(db.commandRows()[0].status, "synced");
+  db.close();
+});
+
+test("confirmed writes become visible only after the WordPress response", async () => {
+  const db = new BookingDatabase(":memory:");
+  const pendingCreate = create(db);
+  assert.equal(db.listBookings("2026-07-20", "2026-07-20").length, 0);
+  const createQueue = new CommandQueue({
+    database: db,
+    api: {
+      availability: async () => ({ available: true }),
+      create: async () => ({ payload: { booking_id: 81 } })
+    }
+  });
+  await createQueue.execute(db.getCommand(pendingCreate.commandId));
+  assert.equal(db.listBookings("2026-07-20", "2026-07-20")[0].serverId, 81);
+
+  const queuedEdit = db.optimisticUpdate(pendingCreate.booking.localId, { note: "Confirmată" }, "note");
+  assert.equal(db.bookingRow(pendingCreate.booking.localId).note, "");
+  const editQueue = new CommandQueue({ database: db, api: { note: async () => ({ payload: { updated: true } }) } });
+  await editQueue.execute(db.getCommand(queuedEdit.commandId));
+  assert.equal(db.bookingRow(pendingCreate.booking.localId).note, "Confirmată");
   db.close();
 });
 
@@ -182,25 +205,25 @@ function remoteBooking(db) {
   return db.upsertRemoteBooking({ serverId: 44, externalId: null, resourceId: 4, dates: ["2026-07-20", "2026-07-21"], status: "pending", trashed: false, note: "Avans: 30, Cost: 100, Rest: 70", formData: { email: { value: "client@example.com", type: "email" } } });
 }
 
-test("deposit queue uses the authoritative WordPress note when the local note is stale", () => {
+test("deposit queue uses the authoritative WordPress note without publishing it before confirmation", () => {
   const db = new BookingDatabase(":memory:");
   const booking = db.upsertRemoteBooking({ serverId: 45, externalId: null, resourceId: 4, dates: ["2026-07-20", "2026-07-21"], status: "pending", trashed: false, note: "Notă locală veche", formData: {} });
   const serverNote = "Sosire târzie\nAvans: 30, Cost: 1000, Rest: 970\nPăstrează locul aproape de recepție";
   db.queueDepositUpdate(booking.localId, { deposit: 40, total: 1000, note: serverNote });
   const command = db.commandRows().find((item) => item.type === "deposit_update");
   assert.equal(command.payload.expected_note, serverNote);
-  assert.equal(db.bookingRow(booking.localId).note, "Sosire târzie\nCost total: 1.000 RON, Depozit: 40 RON, Rest: 960 RON\nPăstrează locul aproape de recepție");
+  assert.equal(db.bookingRow(booking.localId).note, "Notă locală veche");
   db.close();
 });
 
-test("zero deposit is queued and persisted locally as the full remaining balance", () => {
+test("zero deposit remains pending until WordPress confirms it", () => {
   const db = new BookingDatabase(":memory:");
   const booking = remoteBooking(db);
   db.queueDepositUpdate(booking.localId, { deposit: 0, total: 100, note: booking.note });
   const command = db.commandRows().find((item) => item.type === "deposit_update");
   assert.equal(command.payload.deposit, 0);
   assert.equal(command.payload.total, 100);
-  assert.equal(db.bookingRow(booking.localId).note, "Cost total: 100 RON, Depozit: 0 RON, Rest: 100 RON");
+  assert.equal(db.bookingRow(booking.localId).note, "Avans: 30, Cost: 100, Rest: 70");
   db.close();
 });
 
@@ -231,10 +254,12 @@ test("payment email waits for its deposit update and uses stable command keys", 
 test("deposit conflict blocks its dependent payment email", async () => {
   const db = new BookingDatabase(":memory:");
   const booking = remoteBooking(db);
-  db.queueDepositUpdate(booking.localId, 40);
-  db.queuePaymentRequest(booking.localId, { reason: "aBcDeF", nights: 1, start_date: "2026-07-20", end_date: "2026-07-21" });
+  const deposit = db.queueDepositUpdate(booking.localId, 40);
+  const payment = db.queuePaymentRequest(booking.localId, { reason: "aBcDeF", nights: 1, start_date: "2026-07-20", end_date: "2026-07-21" });
   const queue = new CommandQueue({ database: db, api: { deposit_update: async () => { throw Object.assign(new Error("Nota s-a schimbat"), { status: 409, code: "note_conflict" }); } } });
+  const waiting = queue.waitForAttempt(payment.commandId);
   await queue.execute(db.readyCommands()[0]);
+  await assert.rejects(waiting, (error) => error.code === "dependency_failed" && error.previousActionId === deposit.commandId);
   assert.equal(db.commandRows().find((command) => command.type === "deposit_update").status, "conflict");
   assert.equal(db.readyCommands().length, 0);
   assert.equal(db.commandRows().find((command) => command.type === "payment_request").status, "queued");

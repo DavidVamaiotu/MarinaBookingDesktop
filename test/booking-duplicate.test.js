@@ -50,7 +50,7 @@ test("duplicate input rejects the original or an inactive resource", () => {
   assert.throws(() => BookingFields.duplicateBookingInput(booking, { id: 8, active: false }), { code: "invalid_target_resource" });
 });
 
-test("desktop create persistence adds a separate booking and leaves the source row unchanged", () => {
+test("desktop duplicate persistence keeps the draft hidden and leaves the source row unchanged", () => {
   const database = new BookingDatabase(":memory:");
   database.writeBooking({
     serverId: 701,
@@ -62,7 +62,9 @@ test("desktop create persistence adds a separate booking and leaves the source r
   });
   const sourceBefore = database.bookingRow("server:701");
   const input = BookingFields.duplicateBookingInput(sourceBefore, { id: 12, active: true, defaultForm: "room-12" });
-  const created = database.optimisticCreate(input).booking;
+  const pending = database.optimisticCreate(input);
+  database.optimisticUpdate(pending.booking.localId, { note: input.note }, "note");
+  const created = database.bookingRow(pending.booking.localId);
   const sourceAfter = database.bookingRow("server:701");
 
   assert.deepEqual(sourceAfter, sourceBefore);
@@ -71,9 +73,11 @@ test("desktop create persistence adds a separate booking and leaves the source r
   assert.equal(created.resourceId, 12);
   assert.equal(created.formData.name.value, "Ana");
   assert.equal(created.formData.details.value, "Detalii");
-  assert.equal(created.note, "Notă originală");
+  assert.equal(created.note, "");
   assert.equal(created.status, "approved");
+  assert.equal(database.listBookings("2026-08-10", "2026-08-11").length, 1);
   assert.equal(database.readyCommands().filter((command) => command.type === "create").length, 1);
+  assert.equal(database.commandRows().find((command) => command.type === "note").payload.note, "Notă originală");
   database.close();
 });
 

@@ -559,14 +559,6 @@ const API_ACTION_MESSAGES = Object.freeze({
   testConnection: ["Se testează conexiunea API…", "Conexiunea API funcționează."]
 });
 const DESKTOP_QUEUE_MESSAGES = Object.freeze({
-  createBooking: "Rezervarea a fost pusă în coada locală.",
-  editBooking: "Modificările au fost puse în coada locală.",
-  setStatus: "Statusul a fost pus în coada locală.",
-  setNote: "Nota a fost pusă în coada locală.",
-  setTrash: "Modificarea a fost pusă în coada locală.",
-  updateDeposit: "Avansul a fost pus în coada locală.",
-  requestPayment: "Emailul de plată a fost pus în coada locală.",
-  retryCommand: "Acțiunea a fost retrimisă în coada locală.",
   revertBooking: "Modificarea locală a fost anulată.",
   clearFailedCommands: "Acțiunile eșuate au fost curățate."
 });

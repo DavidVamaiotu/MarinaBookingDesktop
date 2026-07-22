@@ -77,15 +77,15 @@ class CommandQueue extends EventEmitter {
   }
 
   async execute(command) {
-    const currentEndpoint = this.database.getSettings().apiBaseUrl;
-    if (command.api_base_url && command.api_base_url !== currentEndpoint) {
-      this.database.markCommand(command.id, "needs_attention", { code: "endpoint_changed", message: "Adresa API s-a schimbat; verifică ținta înainte de a reîncerca această comandă." });
-      return;
-    }
-    this.database.markSending(command.id);
-    this.emit("changed");
-    const booking = command.booking_local_id ? this.database.bookingRow(command.booking_local_id) : null;
     try {
+      const currentEndpoint = this.database.getSettings().apiBaseUrl;
+      if (command.api_base_url && command.api_base_url !== currentEndpoint) {
+        this.database.markCommand(command.id, "needs_attention", { code: "endpoint_changed", message: "Adresa API s-a schimbat; verifică ținta înainte de a reîncerca această comandă." });
+        return;
+      }
+      this.database.markSending(command.id);
+      this.emit("changed");
+      const booking = command.booking_local_id ? this.database.bookingRow(command.booking_local_id) : null;
       if (!booking) throw Object.assign(new Error("Rezervarea locală nu mai există."), { code: "local_booking_missing", permanent: true });
       let response;
       if (!this.skipAvailabilityChecks && (command.type === "create" || (command.type === "edit" && command.payload.availability_dates?.length))) {
@@ -113,7 +113,64 @@ class CommandQueue extends EventEmitter {
       this.database.setMeta("online", "true");
     } catch (error) {
       await this.handleFailure(command, error);
+    } finally {
+      this.emit("attempted", this.database.getCommand(command.id));
     }
+  }
+
+  waitForAttempt(commandId) {
+    const settle = (command, resolve, reject) => {
+      if (command?.status === "synced") {
+        resolve(command.result_json ? JSON.parse(command.result_json) : null);
+        return true;
+      }
+      if (command && ["queued", "sending"].includes(command.status)) return false;
+      const error = Object.assign(new Error(command?.error_message || "Operația nu a fost confirmată de WordPress."), {
+        code: command?.error_code || "request_failed",
+        conflict: command?.status === "conflict",
+        temporary: command?.status === "queued"
+      });
+      reject(error);
+      return true;
+    };
+    const dependencyError = (command) => {
+      if (!command?.depends_on_command_id) return null;
+      const dependency = this.database.getCommand(command.depends_on_command_id);
+      if (!dependency || ["queued", "sending", "synced"].includes(dependency.status)) return null;
+      return Object.assign(new Error(dependency.error_message || "Operația anterioară nu a fost confirmată de WordPress."), {
+        code: "dependency_failed",
+        conflict: dependency.status === "conflict",
+        previousActionId: dependency.id,
+        previousErrorCode: dependency.error_code || null
+      });
+    };
+    return new Promise((resolve, reject) => {
+      const current = this.database.getCommand(commandId);
+      if (!current) return reject(Object.assign(new Error("Comanda nu a fost găsită."), { code: "command_missing" }));
+      if (current.status === "synced") return settle(current, resolve, reject);
+      const initialDependencyError = dependencyError(current);
+      if (initialDependencyError) return reject(initialDependencyError);
+      const listener = (attempted) => {
+        const command = this.database.getCommand(commandId);
+        const blockedError = dependencyError(command);
+        if (blockedError) {
+          this.off("attempted", listener);
+          reject(blockedError);
+          return;
+        }
+        if (attempted?.id !== commandId) return;
+        this.off("attempted", listener);
+        // A completed attempt that was put back in the queue is still an
+        // unconfirmed write, so report the server/network error to the caller.
+        if (command.status === "queued") {
+          reject(Object.assign(new Error(command.error_message || "Operația nu a fost confirmată de WordPress."), { code: command.error_code || "temporary_failure", temporary: true }));
+          return;
+        }
+        settle(command, resolve, reject);
+      };
+      this.on("attempted", listener);
+      this.schedule(0);
+    });
   }
 
   async handleFailure(command, error) {

@@ -251,7 +251,13 @@ class BookingDatabase {
       VALUES(?,?,?,?,?,?,1,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,parent_id=excluded.parent_id,capacity=excluded.capacity,base_cost=excluded.base_cost,default_form=excluded.default_form,active=1,payload_json=excluded.payload_json,updated_at=excluded.updated_at`);
     const timestamp = now();
     this.transaction(() => {
-      this.db.prepare("UPDATE resources SET active=0,updated_at=?").run(timestamp);
+      const resourceIds = resources.map((resource) => Number(resource.id));
+      if (resourceIds.length) {
+        const placeholders = resourceIds.map(() => "?").join(",");
+        this.db.prepare(`DELETE FROM resources WHERE id NOT IN (${placeholders})`).run(...resourceIds);
+      } else {
+        this.db.prepare("DELETE FROM resources").run();
+      }
       for (const resource of resources) {
         statement.run(Number(resource.id), String(resource.title || `Resource ${resource.id}`), resource.parent_id ?? null, resource.capacity ?? null, resource.base_cost ?? null, resource.default_form || "", JSON.stringify(resource), timestamp);
       }
@@ -294,7 +300,7 @@ class BookingDatabase {
   }
 
   listBookings(start, end) {
-    return this.db.prepare("SELECT DISTINCT b.* FROM bookings b JOIN booking_dates d ON d.booking_local_id=b.local_id WHERE d.booking_date BETWEEN ? AND ? ORDER BY b.resource_id,b.start_date,b.server_id").all(start, end).map((row) => this.hydrateBooking(row));
+    return this.db.prepare("SELECT DISTINCT b.* FROM bookings b JOIN booking_dates d ON d.booking_local_id=b.local_id WHERE b.server_id IS NOT NULL AND d.booking_date BETWEEN ? AND ? ORDER BY b.resource_id,b.start_date,b.server_id").all(start, end).map((row) => this.hydrateBooking(row));
   }
 
   loadedRange(start, end, resourceId = 0) {
@@ -408,7 +414,9 @@ class BookingDatabase {
     const externalId = randomUUID();
     const localId = `local:${externalId}`;
     return this.transaction(() => {
-      const booking = this.writeBooking({ ...input, localId, externalId, status: input.approved ? "approved" : "pending", trashed: false, syncState: "queued" });
+      // Keep the durable create draft for retry/reconciliation, but listBookings
+      // hides it until WordPress returns a server id.
+      const booking = this.writeBooking({ ...input, note: "", localId, externalId, status: input.approved ? "approved" : "pending", trashed: false, syncState: "queued" });
       this.setOverlay(localId, null, booking);
       const commandId = this.enqueue("create", localId, input.resourceId, { resource_id: input.resourceId, dates: input.apiDates || this.bookingDateTimes(input.dates), form_data: input.formData, booking_form_type: input.bookingFormType || "", approved: Boolean(input.approved), send_email: Boolean(input.sendEmail), external_id: externalId }, { noCoalesce: true, idempotencyKey: externalId, commandId: externalId });
       return { booking, commandId };
@@ -420,26 +428,28 @@ class BookingDatabase {
       const current = this.bookingRow(localId);
       if (!current) throw new Error("Rezervarea nu a fost găsită.");
       const next = { ...current, ...patch, formData: patch.formData || current.formData, dates: patch.dates || current.dates, syncState: "queued" };
-      const booking = this.writeBooking(next, { preserveOverlay: true });
-      this.setOverlay(localId, current, booking);
+      // The command contains the proposed state. Keep the visible booking on
+      // its last server-confirmed values until markCommandSynced commits it.
+      this.setOverlay(localId, current, current);
       let payload;
-      if (type === "status") payload = { status: booking.status, send_email: Boolean(patch.sendEmail) };
-      else if (type === "note") payload = { note: booking.note };
-      else if (type === "trash") payload = { trash: booking.trashed, send_email: Boolean(patch.sendEmail) };
+      if (type === "status") payload = { status: next.status, send_email: Boolean(patch.sendEmail) };
+      else if (type === "note") payload = { note: next.note };
+      else if (type === "trash") payload = { trash: next.trashed, send_email: Boolean(patch.sendEmail) };
       else {
-        const apiDates = this.bookingDateTimes(booking.dates);
+        const apiDates = this.bookingDateTimes(next.dates);
         payload = {
-          resource_id: booking.resourceId,
+          resource_id: next.resourceId,
           dates: apiDates,
-          form_data: booking.formData,
+          form_data: next.formData,
           booking_form_type: patch.bookingFormType || "",
-          note: booking.note,
+          note: next.note,
           send_email: Boolean(patch.sendEmail),
           availability_dates: apiDates
         };
       }
-      const commandId = this.enqueue(type, localId, booking.resourceId, payload);
-      return { booking, commandId };
+      const commandId = this.enqueue(type, localId, next.resourceId, payload);
+      this.refreshBookingSyncState(localId);
+      return { booking: this.bookingRow(localId), commandId };
     });
   }
 
@@ -457,14 +467,14 @@ class BookingDatabase {
       const authoritativeTotal = Number(input.total ?? pricing.total);
       if (!Number.isFinite(authoritativeTotal) || Math.abs(authoritativeTotal - pricing.total) > 0.005) throw new Error("Costul verificat nu corespunde notei WordPress.");
       const updated = PricingNote.update(authoritativeNote, Number(input.deposit), authoritativeTotal);
-      const booking = this.writeBooking({ ...current, note: updated.note, syncState: "queued" }, { preserveOverlay: true });
-      this.setOverlay(localId, current, booking);
+      this.setOverlay(localId, current, current);
       const commandId = this.enqueue("deposit_update", localId, null, {
         deposit: updated.deposit,
         total: updated.total,
         expected_note: authoritativeNote
       }, { noCoalesce: true });
-      return { booking, commandId, pricing: updated };
+      this.refreshBookingSyncState(localId);
+      return { booking: this.bookingRow(localId), commandId, pricing: updated };
     });
   }
 
@@ -539,6 +549,7 @@ class BookingDatabase {
           } else if (command.type === "deposit_update") {
             nextBase.note = result?.note || PricingNote.update(command.payload.expected_note, command.payload.deposit, command.payload.total).note;
           }
+          this.writeBooking({ ...nextBase, localId: command.booking_local_id, syncState: "sending" }, { preserveOverlay: true });
           this.db.prepare("UPDATE optimistic_overlays SET base_json=?,remote_shadow_json=COALESCE(remote_shadow_json,?),updated_at=? WHERE booking_local_id=?").run(JSON.stringify(nextBase), JSON.stringify(base), now(), command.booking_local_id);
         }
       }
@@ -551,6 +562,8 @@ class BookingDatabase {
       const duplicate = this.db.prepare("SELECT local_id FROM bookings WHERE server_id=? AND local_id<>?").get(Number(serverId), command.booking_local_id);
       if (duplicate) this.db.prepare("DELETE FROM bookings WHERE local_id=? AND sync_state='synced'").run(duplicate.local_id);
       this.db.prepare("UPDATE bookings SET server_id=?,sync_state='synced',updated_at=? WHERE local_id=?").run(Number(serverId), now(), command.booking_local_id);
+      const confirmed = this.bookingRow(command.booking_local_id);
+      this.db.prepare("UPDATE optimistic_overlays SET base_json=?,overlay_json=?,updated_at=? WHERE booking_local_id=?").run(JSON.stringify(confirmed), JSON.stringify(confirmed), now(), command.booking_local_id);
       this.markCommand(command.id, "synced", { result });
       this.refreshBookingSyncState(command.booking_local_id);
     });

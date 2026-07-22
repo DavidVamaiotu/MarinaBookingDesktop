@@ -1,6 +1,6 @@
 {
   "name": "marina-booking-desktop",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "description": "Fast offline-capable Electron manager for Marina Booking API reservations",
   "main": "electron-main.js",
   "author": "Marina Park",

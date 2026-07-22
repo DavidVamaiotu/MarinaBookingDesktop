@@ -93,7 +93,7 @@ test("a successful authenticated refresh resumes the paused queue and requeues a
   database.close();
 });
 
-test("retrying endpoint-quarantined work cannot retarget it to the new site", () => {
+test("retrying endpoint-quarantined work cannot retarget it to the new site", async () => {
   const database = new BookingDatabase(":memory:");
   database.saveSettings({ apiBaseUrl: "https://site-a.example/wp-json/marina-booking/v1", username: "a" });
   const created = database.optimisticCreate({ resourceId: 4, dates: ["2026-07-20"], formData: { name: { value: "Fixture", type: "text" } } });
@@ -103,13 +103,13 @@ test("retrying endpoint-quarantined work cannot retarget it to the new site", ()
   queue.schedule = () => {};
   queue.resumeAfterCredentials = () => {};
   const service = new BookingService({ database, api: {}, queue, vault: { hasPassword: () => true } });
-  assert.throws(() => service.retry(created.commandId), (error) => error.code === "endpoint_changed");
+  await assert.rejects(service.retry(created.commandId), (error) => error.code === "endpoint_changed");
   assert.equal(database.getCommand(created.commandId).status, "needs_attention");
   assert.equal(database.getCommand(created.commandId).api_base_url, "https://site-a.example/wp-json/marina-booking/v1");
   database.close();
 });
 
-test("inactive resources remain visible only when referenced by bookings", () => {
+test("resources removed by WordPress stay absent even when a cached booking references them", () => {
   const database = new BookingDatabase(":memory:");
   database.replaceResources([{ id: 4, title: "Active" }, { id: 5, title: "Removed" }]);
   database.replaceResources([{ id: 4, title: "Active" }]);
@@ -119,7 +119,34 @@ test("inactive resources remain visible only when referenced by bookings", () =>
   queue.stop = () => {};
   const service = new BookingService({ database, api: {}, queue, vault: { hasPassword: () => true } });
   const resources = service.state({ start: "2026-07-01", end: "2026-07-31" }).resources;
-  assert.deepEqual(resources.map((resource) => [resource.id, resource.active]), [[4, true], [5, false]]);
+  assert.deepEqual(resources.map((resource) => [resource.id, resource.active]), [[4, true]]);
+  database.close();
+});
+
+test("desktop mutations wait for WordPress before changing the local booking", async () => {
+  const database = new BookingDatabase(":memory:");
+  const booking = database.upsertRemoteBooking({ serverId: 91, resourceId: 4, dates: ["2026-07-20"], formData: {}, status: "pending", note: "Old" });
+  let confirmRequest;
+  let requestStarted;
+  const started = new Promise((resolve) => { requestStarted = resolve; });
+  const confirmed = new Promise((resolve) => { confirmRequest = resolve; });
+  const api = {
+    note: async () => {
+      requestStarted();
+      await confirmed;
+      return { payload: { updated: true } };
+    }
+  };
+  const queue = new CommandQueue({ database, api, skipAvailabilityChecks: true });
+  const service = new BookingService({ database, api, queue, vault: { hasPassword: () => true } });
+  queue.start();
+  const saving = service.update(booking.localId, { note: "New" }, "note");
+  await queue.pump();
+  await started;
+  assert.equal(database.bookingRow(booking.localId).note, "Old");
+  confirmRequest();
+  assert.equal((await saving).note, "New");
+  queue.stop();
   database.close();
 });
 

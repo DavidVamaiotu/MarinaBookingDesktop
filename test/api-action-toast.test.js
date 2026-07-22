@@ -16,6 +16,7 @@ test("important API mutations use the shared action toast", () => {
   }
   assert.match(renderer, /const toast = showToast\(pendingMessage, "pending"\)/);
   assert.match(renderer, /DESKTOP_QUEUE_MESSAGES\[method\]/);
+  assert.doesNotMatch(renderer, /createBooking: "Rezervarea a fost pusă în coada locală/);
   assert.match(renderer, /showToast\(completedMessage, "success", toast\)/);
   assert.match(renderer, /showToast\(shortErrorMessage\(error\), "error", toast\)/);
 });

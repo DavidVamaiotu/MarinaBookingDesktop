@@ -72,11 +72,7 @@ class BookingService extends EventEmitter {
     const dates = range || { start: new Date().toISOString().slice(0, 10), end: new Date().toISOString().slice(0, 10) };
     const diagnostics = this.database.diagnostics();
     const bookings = this.database.listBookings(dates.start, dates.end).filter((booking) => !this.resourceIds || this.resourceIds.has(Number(booking.resourceId)));
-    const referencedResourceIds = new Set(bookings.map((booking) => Number(booking.resourceId)));
-    const resources = this.database.listResources({ includeInactive: true }).filter((resource) => {
-      if (this.resourceIds && !this.resourceIds.has(Number(resource.id))) return false;
-      return resource.active || referencedResourceIds.has(Number(resource.id));
-    });
+    const resources = this.database.listResources().filter((resource) => !this.resourceIds || this.resourceIds.has(Number(resource.id)));
     return {
       resources,
       bookings,
@@ -148,19 +144,22 @@ class BookingService extends EventEmitter {
     return this.refreshInFlight;
   }
 
-  create(input) {
+  async create(input) {
     const result = this.database.optimisticCreate(input);
-    if (input.note) this.database.optimisticUpdate(result.booking.localId, { note: input.note }, "note");
+    const note = input.note ? this.database.optimisticUpdate(result.booking.localId, { note: input.note }, "note") : null;
     this.emitState();
-    this.queue.schedule(0);
+    await this.queue.waitForAttempt(result.commandId);
+    if (note) await this.queue.waitForAttempt(note.commandId);
+    this.emitState();
     return this.database.bookingRow(result.booking.localId);
   }
 
-  update(localId, patch, type = "edit") {
+  async update(localId, patch, type = "edit") {
     const result = this.database.optimisticUpdate(localId, patch, type);
     this.emitState();
-    this.queue.schedule(0);
-    return result.booking;
+    await this.queue.waitForAttempt(result.commandId);
+    this.emitState();
+    return this.database.bookingRow(localId);
   }
 
   payment(localId) {
@@ -169,17 +168,19 @@ class BookingService extends EventEmitter {
     return this.api.payment(booking.serverId);
   }
 
-  updateDeposit(localId, payment) {
+  async updateDeposit(localId, payment) {
     const result = this.database.queueDepositUpdate(localId, payment);
     this.emitState();
-    this.queue.schedule(0);
-    return result;
+    await this.queue.waitForAttempt(result.commandId);
+    this.emitState();
+    return { ...result, booking: this.database.bookingRow(localId) };
   }
 
-  requestPayment(localId, paymentRequest) {
+  async requestPayment(localId, paymentRequest) {
     const result = this.database.queuePaymentRequest(localId, paymentRequest);
     this.emitState();
-    this.queue.schedule(0);
+    await this.queue.waitForAttempt(result.commandId);
+    this.emitState();
     return result;
   }
 
@@ -222,14 +223,15 @@ class BookingService extends EventEmitter {
     this.quoteCache.clear();
   }
 
-  retry(commandId) {
+  async retry(commandId) {
     const command = this.database.getCommand(commandId);
     if (command?.error_code === "endpoint_changed" && command.api_base_url !== this.database.getSettings().apiBaseUrl) {
       throw Object.assign(new Error("Comanda aparține vechii adrese API. Revino la acea adresă pentru reîncercare sau anulează modificarea locală."), { code: "endpoint_changed", permanent: true });
     }
     this.database.retryCommand(commandId);
     if (command?.error_code === "endpoint_changed") this.queue.resumeAfterCredentials({ retryFailed: false });
-    else this.queue.schedule(0);
+    this.emitState();
+    await this.queue.waitForAttempt(commandId);
     this.emitState();
   }
 
