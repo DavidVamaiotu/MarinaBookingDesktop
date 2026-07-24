@@ -666,6 +666,7 @@ function updateSyncUi() {
   const endpointChanged = state.commands.some((command) => command.errorCode === "endpoint_changed");
   const indicator = $("#syncIndicator");
   indicator.className = `sync-indicator ${info.failed ? "attention" : info.online ? "online" : "offline"}`;
+  indicator.dataset.issueCount = info.failed || "";
   $("#syncText").textContent = endpointChanged ? "Verifică adresa API" : info.authPaused ? "Verifică datele de acces" : info.online ? "Conectat" : "Deconectat";
   $("#syncCounts").textContent = `${info.queued || 0} în coadă · ${info.failed || 0} cu probleme`;
   const banner = $("#banner");
@@ -1092,16 +1093,75 @@ function cancelAvailabilitySwipe(event) {
   availabilitySwipeState = null;
 }
 
+function commandPayload(command) {
+  return command?.payload && typeof command.payload === "object" ? command.payload : {};
+}
+
+function commandFormData(command) {
+  const payload = commandPayload(command);
+  return payload.form_data || payload.formData || {};
+}
+
+function commandClientLabel(command) {
+  const booking = command.bookingLocalId ? bookingById(command.bookingLocalId) : null;
+  const source = booking || { formData: commandFormData(command) };
+  const name = [BookingFields.value(source, "firstName"), BookingFields.value(source, "lastName")].filter(Boolean).join(" ").trim();
+  if (name) return name;
+  return command.bookingLocalId ? `Rezervare ${command.bookingLocalId}` : "Client nou";
+}
+
+function commandFieldValue(field) {
+  const value = String(field?.value ?? "").trim();
+  if (field?.type === "checkbox") return ["true", "yes", "1", "on"].includes(value.toLowerCase()) ? "da" : "nu";
+  return value || "gol";
+}
+
+function commandDate(value) {
+  return String(value || "").slice(0, 10);
+}
+
+function commandChangeSummary(command) {
+  const payload = commandPayload(command);
+  const booking = command.bookingLocalId ? bookingById(command.bookingLocalId) : null;
+  const details = [];
+  if (["create", "edit"].includes(command.type)) {
+    const resourceId = payload.resource_id ?? payload.resourceId ?? command.resourceId;
+    const resource = resourceById(resourceId);
+    if (command.type === "create" || !booking || Number(resourceId) !== Number(booking.resourceId)) details.push(`Unitate: ${resource?.title || `#${resourceId}`}`);
+    const dates = Array.isArray(payload.dates) ? payload.dates.map(commandDate).filter(Boolean) : [];
+    const bookingDates = Array.isArray(booking?.dates) ? booking.dates.map(commandDate) : [];
+    if (dates.length && (command.type === "create" || dates.join("|") !== bookingDates.join("|"))) details.push(`Perioadă: ${dates[0]} – ${dates[dates.length - 1]}`);
+    if (command.type === "edit") {
+      for (const [name, field] of Object.entries(commandFormData(command))) {
+        if (commandFieldValue(field) !== commandFieldValue(booking?.formData?.[name])) details.push(`${detailsFieldLabel(name, field)}: ${commandFieldValue(field)}`);
+      }
+      if (Object.hasOwn(payload, "note") && String(payload.note || "") !== String(booking?.note || "")) details.push(`Notă: ${String(payload.note || "").trim() || "ștearsă"}`);
+    }
+    if (command.type === "create") details.unshift("Rezervare nouă");
+  } else if (command.type === "status") details.push(`Status: ${payload.status === "approved" ? "aprobată" : "în așteptare"}`);
+  else if (command.type === "note") details.push(`Notă: ${String(payload.note || "").trim() || "ștearsă"}`);
+  else if (command.type === "trash") details.push(payload.trash ?? payload.trashed ? "Mutare în gunoi" : "Restabilire din gunoi");
+  else if (command.type === "deposit_update") details.push(`Avans: ${payload.deposit} RON${payload.total != null ? ` din ${payload.total} RON` : ""}`);
+  else if (command.type === "payment_request") {
+    details.push(`Trimite emailul de plată${payload.reason ? ` (${payload.reason})` : ""}`);
+    if (payload.start_date && payload.end_date) details.push(`Perioadă: ${payload.start_date} – ${payload.end_date}`);
+  }
+  if (payload.send_email) details.push("Cu notificare email");
+  return details.join(" · ") || "Detaliile schimbării nu mai sunt disponibile.";
+}
+
 function renderCommands() {
   const clearableStatuses = window.marina.platform === "android" ? ["failed", "conflict", "needs_attention"] : ["failed"];
   const failedCount = state.commands.filter((command) => clearableStatuses.includes(command.status)).length;
   const commandHtml = (command, compact = false) => {
     const retryable = ["failed", "conflict", "needs_attention"].includes(command.status);
+    const client = commandClientLabel(command);
+    const change = commandChangeSummary(command);
     const bookingActions = command.bookingLocalId && window.marina.platform !== "android"
       ? `<button class="secondary compact" data-revert-booking="${escapeHtml(command.bookingLocalId)}" type="button">Revino la local</button><button class="secondary compact" data-open-booking="${escapeHtml(command.bookingLocalId)}" type="button">Deschide detaliile</button>`
       : command.bookingLocalId && ["deposit_update", "payment_request"].includes(command.type)
         ? `<button class="secondary compact" data-revert-booking="${escapeHtml(command.bookingLocalId)}" type="button">Anulează și reîncarcă</button>` : "";
-    return `<div class="command"><div><strong>${escapeHtml(displayCommand(command.type))}</strong> <span>${escapeHtml(displayStatus(command.status))}</span></div><small>${new Date(command.updatedAt).toLocaleString("ro-RO")}</small>${command.errorMessage ? `<div class="error">${escapeHtml(command.errorMessage)}</div>` : ""}${!compact && retryable ? `<button class="secondary compact" data-retry-command="${command.id}" type="button">Reîncearcă</button>${bookingActions}` : ""}</div>`;
+    return `<div class="command"><div><strong>${escapeHtml(displayCommand(command.type))}</strong> <span>${escapeHtml(displayStatus(command.status))}</span></div><small>${new Date(command.updatedAt).toLocaleString("ro-RO")}</small><div class="command-details"><div><strong>Client:</strong> ${escapeHtml(client)}</div><div><strong>Schimbare:</strong> ${escapeHtml(change)}</div></div>${command.errorMessage ? `<div class="error"><strong>Eroare:</strong> ${escapeHtml(command.errorMessage)}</div>` : ""}${!compact && retryable ? `<button class="secondary compact" data-retry-command="${command.id}" type="button">Reîncearcă</button>${bookingActions}` : ""}</div>`;
   };
   $("#commandList").innerHTML = state.commands.map((command) => commandHtml(command)).join("") || '<div class="availability">Nu există comenzi.</div>';
   $("#clearQueueIssues").hidden = failedCount === 0;
@@ -1501,6 +1561,7 @@ function formBookingInput(form) {
       secondname: { value: form.elements.secondname.value, type: "text" },
       email: { value: form.elements.email.value, type: "email" },
       phone: { value: form.elements.phone.value, type: "text" },
+      ...(form.elements.details.value.trim() ? { details: { value: form.elements.details.value, type: "textarea" } } : {}),
       ...pricingFormData(form)
     },
     bookingFormType: selectedResource()?.defaultForm || "",
@@ -1850,8 +1911,8 @@ function populateDetails(booking, reset = true) {
     const electricityFields = extraFields.filter(([name]) => isElectricityField(name));
     if (activeWorkspace === "camping") optionFields.push(electricityFields.find(([, field]) => String(field?.value || "").trim()) || electricityFields[0] || ["Energie_electrica", { value: "no", type: "checkbox" }]);
     const namedObservation = extraFields.find(([name, field]) => BookingFields.matchesName(name, "details") && BookingFields.isDetailsField(name, field));
-    const observation = namedObservation || extraFields.find(([name, field]) => !isVehiclePlateField(name) && BookingFields.isDetailsField(name, field));
-    const reservationFields = observation ? [...optionFields, observation] : optionFields;
+    const observation = namedObservation || extraFields.find(([name, field]) => !isVehiclePlateField(name) && BookingFields.isDetailsField(name, field)) || ["details", { value: "", type: "textarea" }];
+    const reservationFields = [...optionFields, observation];
     $("#clientExtraFields").hidden = clientFields.length === 0;
     $("#clientExtraFields").innerHTML = clientFields.map(([name, field]) => detailsFieldHtml(name, field)).join("");
     $("#reservationExtraFields").hidden = reservationFields.length === 0;

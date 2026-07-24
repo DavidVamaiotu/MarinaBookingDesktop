@@ -86,7 +86,8 @@ test("reservation details expose only requested conditional WordPress fields", (
   assert.match(indexSource, /Telefon<input name="phone"/);
   assert.match(indexSource, /id="clientExtraFields"/);
   assert.match(indexSource, /id="reservationExtraFields"/);
-  assert.match(appSource, /const observation = namedObservation \|\| extraFields\.find/);
+  assert.match(appSource, /const observation = namedObservation \|\| extraFields\.find\([\s\S]*\|\| \["details", \{ value: "", type: "textarea" \}\]/);
+  assert.match(appSource, /const reservationFields = \[\.\.\.optionFields, observation\]/);
   assert.match(indexSource, /Trimite notificări pentru acțiuni/);
   assert.equal((indexSource.match(/name="sendEmail"/g) || []).length, 2);
 });
@@ -118,6 +119,13 @@ test("new reservations default to pending with notifications opt-in", () => {
   assert.match(appSource, /sendEmail: Boolean\(form\.elements\.sendEmail\.checked\)/);
   assert.match(appSource, /bookingFormType, note: form\.elements\.note\.value, sendEmail: Boolean\(form\.elements\.sendEmail\.checked\), source/);
   assert.match(appSource, /sendEmail: false, source/);
+});
+
+test("new room and camping reservations save client details as the native WordPress textarea field", () => {
+  assert.match(indexSource, /Detalii client:<textarea name="details" rows="3"/);
+  assert.equal((indexSource.match(/name="details"/g) || []).length, 1);
+  assert.match(appSource, /\.\.\.\(form\.elements\.details\.value\.trim\(\) \? \{ details: \{ value: form\.elements\.details\.value, type: "textarea" \} \} : \{\}\)/);
+  assert.match(stylesSource, /\.create-client-fields input,\.create-client-fields select,\.create-client-fields textarea/);
 });
 
 test("booking details expose separate queueable deposit and payment-email actions", () => {
