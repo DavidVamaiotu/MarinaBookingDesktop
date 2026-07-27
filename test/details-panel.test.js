@@ -19,12 +19,12 @@ test("reservation editor groups fields under clear Romanian sections", () => {
   assert.ok(indexSource.indexOf("<h3>Client</h3>") < indexSource.indexOf("<h3>Sejur / Rezervare</h3>"));
 });
 
-test("reservation editor shows the saved price and an opt-in note replacement control", () => {
+test("reservation editor keeps the saved note and deposit by default", () => {
   assert.match(indexSource, /id="detailsPriceTotal">—/);
   assert.match(indexSource, /id="detailsPriceDeposit">—/);
   assert.match(indexSource, /id="detailsPriceBalance">—/);
-  assert.match(indexSource, /<input name="replaceNoteWithPrice" type="checkbox">/);
-  assert.doesNotMatch(indexSource, /name="replaceNoteWithPrice"[^>]*checked/);
+  assert.match(indexSource, /<input name="keepSavedNoteAndDeposit" type="checkbox" checked>/);
+  assert.match(indexSource, /Păstrează nota și avansul existente/);
   assert.doesNotMatch(indexSource, /name="detailsPrice/);
   const calendarSummary = indexSource.indexOf('id="detailsAvailability"');
   const priceSummary = indexSource.indexOf('id="detailsPriceSummary"');

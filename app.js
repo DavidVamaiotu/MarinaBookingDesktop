@@ -1742,10 +1742,9 @@ async function fetchCreateQuote(requestId, key, { mode = "fast", forceFresh = fa
   }
 }
 
-function schedulePriceCheck({ preserveNoteChoice = false } = {}) {
+function schedulePriceCheck() {
   clearTimeout(quoteTimer);
   const form = calendarForm();
-  if (editingDetails() && !preserveNoteChoice) form.elements.replaceNoteWithPrice.checked = true;
   const key = currentQuoteKey(form);
   const requestId = ++quoteRequestId;
   void window.marina.clearQuoteCache();
@@ -2059,7 +2058,7 @@ function populateDetails(booking, reset = true) {
     form.elements.email.value = BookingFields.value(booking, "email");
     form.elements.phone.value = BookingFields.value(booking, "phone");
     form.elements.sendEmail.checked = false;
-    form.elements.replaceNoteWithPrice.checked = false;
+    form.elements.keepSavedNoteAndDeposit.checked = true;
     form.elements.resourceId.value = booking.resourceId;
     fillGuestCounts(form, {
       adults: BookingFields.value(booking, "adults") || booking.formData?.visitors_val?.value || "1",
@@ -2553,11 +2552,11 @@ async function saveBookingDetails(booking, form) {
     const dates = rangeDates(form.elements.start.value, form.elements.end.value);
     const bookingFormType = resourceById(resourceId)?.defaultForm || "";
     const pricingChanged = currentQuoteKey(form) !== detailsInitialQuoteKey;
-    const replaceNoteWithPrice = form.elements.replaceNoteWithPrice.checked;
+    const replaceNoteAndDeposit = !form.elements.keepSavedNoteAndDeposit.checked;
     if (availabilityState !== "available") throw Object.assign(new Error("Disponibilitatea trebuie confirmată înainte de salvare."), { code: "availability_unconfirmed", permanent: true });
-    if ((pricingChanged || replaceNoteWithPrice) && !await refreshPriceNow({ forceFresh: true })) return;
-    const recalculatedQuote = replaceNoteWithPrice ? normalizedRecalculatedQuote(createQuote) : null;
-    const note = replaceNoteWithPrice
+    if ((pricingChanged || replaceNoteAndDeposit) && !await refreshPriceNow({ forceFresh: true })) return;
+    const recalculatedQuote = replaceNoteAndDeposit ? normalizedRecalculatedQuote(createQuote) : null;
+    const note = replaceNoteAndDeposit
       ? recalculatedBookingNote(recalculatedQuote, form.elements.note.value)
       : form.elements.note.value;
     if (source !== activeWorkspace || selectedBookingId !== booking.localId) throw workspaceChangedError();
@@ -2596,9 +2595,9 @@ $("#detailsForm").addEventListener("input", (event) => {
 });
 $("#detailsForm").elements.adults.addEventListener("change", schedulePriceCheck);
 $("#detailsForm").elements.children.addEventListener("change", schedulePriceCheck);
-$("#detailsForm").elements.replaceNoteWithPrice.addEventListener("change", (event) => {
-  if (!event.target.checked || (createQuote?.valid && createQuoteKey === currentQuoteKey($("#detailsForm")))) return;
-  schedulePriceCheck({ preserveNoteChoice: true });
+$("#detailsForm").elements.keepSavedNoteAndDeposit.addEventListener("change", (event) => {
+  if (event.target.checked || (createQuote?.valid && createQuoteKey === currentQuoteKey($("#detailsForm")))) return;
+  schedulePriceCheck();
 });
 
 $("#detailsStatus").addEventListener("click", async () => {

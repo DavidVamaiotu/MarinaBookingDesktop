@@ -294,8 +294,8 @@ test("opening Add New Reservation dismisses the active booking editor before usi
   assert.deepEqual(events, ["cancel-drag", "close-editor", "reset-create-form", "render-create-calendar", "show-create"]);
 });
 
-test("repricing opts into note replacement unless the user choice is being preserved", () => {
-  const form = { elements: { replaceNoteWithPrice: { checked: false } } };
+test("repricing leaves the keep-note-and-deposit choice unchanged", () => {
+  const form = { elements: { keepSavedNoteAndDeposit: { checked: true } } };
   const quoteCalls = [];
   let quoteKey = "";
   const sandbox = {
@@ -323,14 +323,14 @@ test("repricing opts into note replacement unless the user choice is being prese
   );
 
   schedulePriceCheck();
-  assert.equal(form.elements.replaceNoteWithPrice.checked, true);
+  assert.equal(form.elements.keepSavedNoteAndDeposit.checked, true);
   assert.equal(sandbox.createQuote, null);
   assert.equal(sandbox.createQuoteKey, "");
 
-  form.elements.replaceNoteWithPrice.checked = false;
+  form.elements.keepSavedNoteAndDeposit.checked = false;
   quoteKey = "quote-key";
-  schedulePriceCheck({ preserveNoteChoice: true });
-  assert.equal(form.elements.replaceNoteWithPrice.checked, false);
+  schedulePriceCheck();
+  assert.equal(form.elements.keepSavedNoteAndDeposit.checked, false);
   assert.equal(JSON.stringify(quoteCalls), JSON.stringify([[2, "quote-key", { mode: "fast", source: "camping" }]]));
 });
 
@@ -355,7 +355,7 @@ test("only fields that affect pricing trigger extra-field repricing", () => {
 });
 
 function saveHarness({
-  replaceNoteWithPrice = false,
+  keepSavedNoteAndDeposit = true,
   pricingChanged = true,
   failEdit = false,
   failDeposit = false,
@@ -371,7 +371,7 @@ function saveHarness({
       resourceId: { value: "3" },
       start: { value: "2026-08-04" },
       end: { value: "2026-08-06" },
-      replaceNoteWithPrice: { checked: replaceNoteWithPrice },
+      keepSavedNoteAndDeposit: { checked: keepSavedNoteAndDeposit },
       note: { value: "Nota veche fără preț" },
       sendEmail: { checked: false }
     },
@@ -414,7 +414,7 @@ function saveHarness({
   return { booking, form, saveBookingDetails, calls, events, refreshCalls, closeCount: () => closeCount };
 }
 
-test("save preserves the old note and deposit when note replacement is not selected", async () => {
+test("save preserves the old note and deposit when preservation is checked", async () => {
   const preserving = saveHarness();
   await preserving.saveBookingDetails(preserving.booking, preserving.form);
   assert.equal(JSON.stringify(preserving.refreshCalls), JSON.stringify([{ forceFresh: true }]));
@@ -425,9 +425,9 @@ test("save preserves the old note and deposit when note replacement is not selec
   assert.equal(preserving.closeCount(), 1);
 });
 
-test("save persists the newly quoted note and deposit only after recalculation is selected", async () => {
+test("save persists the newly quoted note and deposit only when preservation is unchecked", async () => {
   const confirmedNote = "Nota veche fără preț Cost total: 225 RON, Depozit: 75 RON, Rest: 150 RON";
-  const replacing = saveHarness({ replaceNoteWithPrice: true, confirmedNote });
+  const replacing = saveHarness({ keepSavedNoteAndDeposit: false, confirmedNote });
   await replacing.saveBookingDetails(replacing.booking, replacing.form);
   assert.equal(JSON.stringify(replacing.refreshCalls), JSON.stringify([{ forceFresh: true }]));
   assert.deepEqual(replacing.events, ["editBooking", "updateDeposit", "close"]);
@@ -454,7 +454,7 @@ test("unchanged pricing fields do not request a quote before a note-preserving s
 });
 
 test("a failed Edit Client reservation update leaves the sidebar and draft intact", async () => {
-  const harness = saveHarness({ replaceNoteWithPrice: true, failEdit: true });
+  const harness = saveHarness({ keepSavedNoteAndDeposit: false, failEdit: true });
 
   await assert.rejects(() => harness.saveBookingDetails(harness.booking, harness.form), /edit failed/);
 
@@ -467,7 +467,7 @@ test("a failed Edit Client reservation update leaves the sidebar and draft intac
 
 test("a failed deposit update leaves the sidebar open and reflects the already-saved recalculated note", async () => {
   const confirmedNote = "Nota veche fără preț Cost total: 225 RON, Depozit: 75 RON, Rest: 150 RON";
-  const harness = saveHarness({ replaceNoteWithPrice: true, failDeposit: true, confirmedNote });
+  const harness = saveHarness({ keepSavedNoteAndDeposit: false, failDeposit: true, confirmedNote });
 
   await assert.rejects(() => harness.saveBookingDetails(harness.booking, harness.form), /deposit failed/);
 
