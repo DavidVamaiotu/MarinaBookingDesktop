@@ -145,7 +145,6 @@ let selectedBookingView = "";
 const paymentSnapshots = new Map();
 const paymentSnapshotErrors = new Map();
 const paymentSnapshotLoading = new Set();
-let detailsPaymentLoad = null;
 let dragState = null;
 let availabilityTimer = null;
 let availabilityRequestId = 0;
@@ -1327,8 +1326,8 @@ function setCreatePricing(message, type = "") {
   const stateLabel = calendarElement("#createQuoteState", "#detailsQuoteState");
   summary.dataset.quoteState = quoteState;
   stateLabel.dataset.state = quoteState;
-  stateLabel.textContent = { stale: "neactualizat", calculating: "se calculează", fresh: "actual", error: "eroare" }[quoteState] || quoteState;
-  if (editingDetails()) $("#detailsPriceSummary").classList.toggle("is-stale", quoteState !== "fresh");
+  stateLabel.textContent = { saved: "salvat", stale: "neactualizat", calculating: "se calculează", fresh: "actual", error: "eroare" }[quoteState] || quoteState;
+  if (editingDetails()) $("#detailsPriceSummary").classList.toggle("is-stale", !["saved", "fresh"].includes(quoteState));
 }
 
 function pricingFormData(form) {
@@ -1362,7 +1361,7 @@ function pricingKeyFormData(form) {
   };
   for (const input of form.querySelectorAll("[data-extra-field]")) {
     const name = input.dataset.extraField;
-    if (name !== "pat-suplimentar" && !isElectricityField(name) && !isVehiclePlateField(name)) continue;
+    if (!isPricingExtraField(name)) continue;
     fields[name] = input.type === "checkbox" ? input.checked : input.value;
   }
   return fields;
@@ -1416,47 +1415,26 @@ function createPricingNote(quote) {
   return PricingNote.format(quote);
 }
 
-async function loadAuthoritativePayment(booking, source, { forceFresh = false } = {}) {
-  const bookingId = booking.localId;
-  if (!forceFresh && detailsPaymentLoad?.bookingId === bookingId && detailsPaymentLoad.source === source) {
-    return detailsPaymentLoad.promise;
-  }
-  const load = { bookingId, source, promise: null };
-  load.promise = window.marina.getPayment(bookingId, { source }).then(
-    (snapshot) => {
-      if (detailsPaymentLoad === load) paymentSnapshots.set(bookingId, snapshot);
-      return snapshot;
-    },
-    (error) => {
-      if (detailsPaymentLoad === load) detailsPaymentLoad = null;
-      throw error;
-    }
-  );
-  detailsPaymentLoad = load;
-  return load.promise;
-}
-
-async function quoteWithAuthoritativeDeposit(booking, quote, source, { forceFresh = false } = {}) {
-  const snapshot = await loadAuthoritativePayment(booking, source, { forceFresh });
+function normalizedRecalculatedQuote(quote) {
   const total = Number(quote?.total);
-  const rawDeposit = snapshot?.deposit;
+  const rawDeposit = quote?.deposit;
   const deposit = Number(rawDeposit);
   if (!Number.isFinite(total) || total < 0 || rawDeposit === null || rawDeposit === undefined || rawDeposit === "" || !Number.isFinite(deposit) || deposit < 0) {
-    throw new Error("Avansul actual nu a putut fi verificat. Nota nu a fost modificată.");
+    throw Object.assign(new Error("Booking Calendar nu a returnat un cost și un avans valide."), { code: "invalid_price_quote", permanent: true });
   }
   if (deposit > total) {
-    throw new Error("Avansul actual depășește noul cost total. Ajustează avansul înainte de înlocuirea notei.");
+    throw Object.assign(new Error("Avansul calculat depășește noul cost total."), { code: "invalid_price_quote", permanent: true });
   }
   const balance = Math.round((total - deposit) * 100) / 100;
   return { ...quote, total, deposit, balance };
 }
 
-async function recalculatedBookingNote(booking, quote, source, currentNote = booking.note) {
-  const authoritativeQuote = await quoteWithAuthoritativeDeposit(booking, quote, source, { forceFresh: true });
-  const pricingLine = PricingNote.format(authoritativeQuote);
+function recalculatedBookingNote(quote, currentNote = "") {
+  const recalculatedQuote = normalizedRecalculatedQuote(quote);
+  const pricingLine = PricingNote.format(recalculatedQuote);
   const note = String(currentNote || "");
   return PricingNote.parse(note)
-    ? PricingNote.update(note, authoritativeQuote.deposit, authoritativeQuote.total).note
+    ? PricingNote.update(note, recalculatedQuote.deposit, recalculatedQuote.total).note
     : `${note}${note && !note.endsWith("\n") ? "\n" : ""}${pricingLine}`;
 }
 
@@ -1465,7 +1443,8 @@ function invalidateCalendarRequests() {
   clearTimeout(quoteTimer);
   availabilityRequestId += 1;
   quoteRequestId += 1;
-  detailsPaymentLoad = null;
+  createQuote = null;
+  createQuoteKey = "";
   void window.marina.clearQuoteCache();
 }
 
@@ -1495,6 +1474,8 @@ function invalidateCreateQuote(message = "Se așteaptă calcularea prețului.") 
   clearTimeout(quoteTimer);
   quoteRequestId += 1;
   quoteState = "stale";
+  createQuote = null;
+  createQuoteKey = "";
   if (!editingDetails()) $("#createQuoteBreakdown").hidden = true;
   void window.marina.clearQuoteCache();
   setCreatePricing(message);
@@ -1704,6 +1685,8 @@ function renderQuoteBreakdown() {
 async function fetchCreateQuote(requestId, key, { mode = "fast", forceFresh = false, source = activeWorkspace } = {}) {
   const form = calendarForm();
   quoteState = "calculating";
+  createQuote = null;
+  createQuoteKey = "";
   setCreatePricing(mode === "full" ? "Se calculează detaliile prețului…" : "Se calculează…");
   renderCreateSummary();
   try {
@@ -1715,12 +1698,7 @@ async function fetchCreateQuote(requestId, key, { mode = "fast", forceFresh = fa
       renderCreateSummary();
       return false;
     }
-    const editing = editingDetails();
-    const booking = editing ? bookingById(selectedBookingId) : null;
-    if (editing && !booking) return false;
-    const displayedQuote = booking
-      ? await quoteWithAuthoritativeDeposit(booking, result, source)
-      : result;
+    const displayedQuote = editingDetails() ? normalizedRecalculatedQuote(result) : result;
     if (source !== activeWorkspace || requestId !== quoteRequestId || key !== currentQuoteKey(form)) return false;
     quoteState = "fresh";
     createQuote = { ...displayedQuote, valid: true };
@@ -1734,6 +1712,8 @@ async function fetchCreateQuote(requestId, key, { mode = "fast", forceFresh = fa
     quoteState = "error";
     const unavailable = error?.code === "rest_no_route"
       ? "Actualizați Marina Booking API la versiunea 1.0.4 pentru calcularea prețului."
+      : error?.permanent && error?.message
+        ? error.message
       : "Prețul nou nu a putut fi calculat. Ultimul preț afișat este vechi.";
     setCreatePricing(unavailable, "unavailable");
     renderCreateSummary();
@@ -1748,6 +1728,8 @@ function schedulePriceCheck({ preserveNoteChoice = false } = {}) {
   const key = currentQuoteKey(form);
   const requestId = ++quoteRequestId;
   void window.marina.clearQuoteCache();
+  createQuote = null;
+  createQuoteKey = "";
   if (!key) {
     quoteState = "stale";
     setCreatePricing("Selectați datele pentru calcularea prețului.");
@@ -1840,6 +1822,10 @@ function isVehiclePlateField(name) {
 
 function isElectricityField(name) {
   return String(name || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "").replace(/\d+$/, "") === "energieelectrica";
+}
+
+function isPricingExtraField(name) {
+  return name === "pat-suplimentar" || isElectricityField(name) || BookingFields.matchesName(name, "coupon");
 }
 
 function detailsFieldLabel(name, field) {
@@ -2023,7 +2009,6 @@ function populateDetails(booking, reset = true) {
   if (reset) invalidateCalendarRequests();
   selectedBookingId = booking.localId;
   selectedBookingView = "edit";
-  if (reset) void loadAuthoritativePayment(booking, activeWorkspace).catch(() => {});
   bookingMenu.hidden = true;
   const form = $("#detailsForm");
   const approved = booking.status === "approved";
@@ -2070,7 +2055,7 @@ function populateDetails(booking, reset = true) {
     createSelectionEnd = form.elements.end.value;
     createCalendarMonth = monthStart(utcDate(createSelectionStart || todayIso()));
     availabilityState = initialDates.valid ? "available" : "idle";
-    quoteState = initialDates.valid && PricingNote.parse(form.elements.note.value) ? "fresh" : "stale";
+    quoteState = initialDates.valid && PricingNote.parse(form.elements.note.value) ? "saved" : "stale";
     createQuote = null;
     createQuoteKey = "";
     detailsInitialQuoteKey = currentQuoteKey(form);
@@ -2536,13 +2521,21 @@ async function saveBookingDetails(booking, form) {
     const replaceNoteWithPrice = form.elements.replaceNoteWithPrice.checked;
     if (availabilityState !== "available") throw Object.assign(new Error("Disponibilitatea trebuie confirmată înainte de salvare."), { code: "availability_unconfirmed", permanent: true });
     if ((pricingChanged || replaceNoteWithPrice) && !await refreshPriceNow({ forceFresh: true })) return;
+    const recalculatedQuote = replaceNoteWithPrice ? normalizedRecalculatedQuote(createQuote) : null;
     const note = replaceNoteWithPrice
-      ? await recalculatedBookingNote(booking, createQuote, source, form.elements.note.value)
+      ? recalculatedBookingNote(recalculatedQuote, form.elements.note.value)
       : form.elements.note.value;
     if (source !== activeWorkspace || selectedBookingId !== booking.localId) throw workspaceChangedError();
     const formData = detailsFormData(booking, form);
     const outboundFormData = BookingFields.prepareFormData(formData, booking.resourceId);
     await runApiAction("editBooking", booking.localId, { resourceId, sourceResourceId: booking.resourceId, dates, formData: outboundFormData, bookingFormType, note, sendEmail: Boolean(form.elements.sendEmail.checked), source });
+    if (recalculatedQuote) {
+      form.elements.note.value = note;
+      paymentSnapshots.delete(booking.localId);
+      paymentSnapshotErrors.delete(booking.localId);
+      await runApiAction("updateDeposit", booking.localId, { deposit: recalculatedQuote.deposit, total: recalculatedQuote.total, note, source });
+      detailsInitialQuoteKey = currentQuoteKey(form);
+    }
     if (source === activeWorkspace && selectedBookingId === booking.localId && selectedBookingView === "edit") closeBookingOverlays();
   });
 }
@@ -2563,10 +2556,7 @@ $("#detailsForm").addEventListener("submit", async (event) => {
 });
 $("#detailsForm").addEventListener("input", (event) => {
   if (event.target.matches('[name="note"]') && !createQuote?.valid) renderDetailsPrice(event.target.value);
-  if (event.target.matches("[data-extra-field]")) {
-    const field = { type: event.target.dataset.fieldType };
-    schedulePriceCheck({ preserveNoteChoice: BookingFields.isDetailsField(event.target.dataset.extraField, field) });
-  }
+  if (event.target.matches("[data-extra-field]") && isPricingExtraField(event.target.dataset.extraField)) schedulePriceCheck();
 });
 $("#detailsForm").elements.adults.addEventListener("change", schedulePriceCheck);
 $("#detailsForm").elements.children.addEventListener("change", schedulePriceCheck);

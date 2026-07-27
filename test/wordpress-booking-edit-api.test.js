@@ -10,8 +10,8 @@ const editStart = source.indexOf("private static function update_booking_operati
 const editEnd = source.indexOf("\n\tpublic static function get_booking", editStart);
 const editSource = source.slice(editStart, editEnd);
 
-test("WordPress bridge v1.0.6 moves bookings through Booking Calendar's native resource helper", () => {
-  assert.match(source, /Version: 1\.0\.6/);
+test("WordPress bridge v1.0.7 moves bookings through Booking Calendar's native resource helper", () => {
+  assert.match(source, /Version: 1\.0\.7/);
   assert.match(editSource, /function_exists\( 'wpbc__sql__change_booking_resource_for_booking' \)/);
   assert.match(editSource, /wpbc_api_booking_add_new\( \$dates, \$form_data, \$existing_resource_id, \$params \)/);
   assert.match(editSource, /wpbc__sql__change_booking_resource_for_booking\( \$booking_id, \$resource_id \)/);

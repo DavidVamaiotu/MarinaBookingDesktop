@@ -1,6 +1,6 @@
 # Marina Booking Desktop
 
-Client desktop Electron pentru rezervările WordPress Booking Calendar prin **Marina Booking API v1.0.6+**. Păstrează designul și interacțiunile timeline-ului Parkline Web, înlocuind serverul local vechi cu un proces principal securizat, bazat exclusiv pe API.
+Client desktop Electron pentru rezervările WordPress Booking Calendar prin **Marina Booking API v1.0.7+**. Păstrează designul și interacțiunile timeline-ului Parkline Web, înlocuind serverul local vechi cu un proces principal securizat, bazat exclusiv pe API.
 
 ## Dezvoltare
 
@@ -67,7 +67,7 @@ Pe Galaxy Z Fold 7 aplicația se adaptează automat atât ecranului exterior, c�
 ### Windows
 
 1. Generează installerul cu `npm run dist` pe Windows sau într-un mediu care poate construi NSIS.
-2. Rulează `dist-electron/MarinaBookingDesktop-Setup-1.0.22.exe`.
+2. Rulează `dist-electron/MarinaBookingDesktop-Setup-1.0.23.exe`.
 3. Installerul este per utilizator și nu cere drepturi de administrator. După instalare, aplicația pornește automat.
 4. Deschide **Setări** și configurează conexiunile **Camere** și **Camping**.
 

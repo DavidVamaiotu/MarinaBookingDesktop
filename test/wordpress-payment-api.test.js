@@ -7,8 +7,8 @@ const path = require("node:path");
 
 const source = readFileSync(path.join(__dirname, "..", "wordpress-plugin", "marina-booking-api-v1.0.2", "marina-booking-api.php"), "utf8");
 
-test("WordPress bridge v1.0.6 exposes idempotent deposit and payment-request routes", () => {
-  assert.match(source, /Version: 1\.0\.6/);
+test("WordPress bridge v1.0.7 exposes idempotent deposit and payment-request routes", () => {
+  assert.match(source, /Version: 1\.0\.7/);
   assert.match(source, /'\/bookings\/\(\?P<id>\\\\d\+\)\/payment'/);
   assert.match(source, /'\/bookings\/\(\?P<id>\\\\d\+\)\/deposit'/);
   assert.match(source, /'\/bookings\/\(\?P<id>\\\\d\+\)\/payment-request'/);
@@ -26,6 +26,13 @@ test("deposit mutation checks the expected note and writes cost plus remark toge
   assert.match(source, /\$deposit < 0 \|\| \$total <= 0/);
   assert.match(source, /SET cost = %f, remark = %s/);
   assert.match(source, /abs\( \(float\) \$latest\['cost'\] - \$deposit \) < 0\.005/);
+});
+
+test("direct note and deposit writes do not invoke incompatible Booking Calendar UI action hooks", () => {
+  assert.doesNotMatch(source, /wpbc_booking_action__set_booking_cost/);
+  assert.doesNotMatch(source, /wpbc_set_booking_note/);
+  assert.match(source, /self::audit\( 'booking_note_updated', \$booking_id \)/);
+  assert.match(source, /self::audit\( 'booking_deposit_updated', \$booking_id \)/);
 });
 
 test("payment snapshot exposes the authoritative WordPress note and database deposit", () => {

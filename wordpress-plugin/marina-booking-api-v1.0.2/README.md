@@ -1,4 +1,8 @@
-# Marina Booking API v1.0.6
+# Marina Booking API v1.0.7
+
+## New in v1.0.7: safe direct note and deposit updates
+
+Note and deposit endpoints keep their existing verified database writes and Marina audit records, but no longer invoke Booking Calendar admin-action hooks after committing. Those hooks expect UI-specific parameter arrays and caused a WordPress critical error when called from the REST bridge.
 
 ## New in v1.0.6: safe booking resource moves
 

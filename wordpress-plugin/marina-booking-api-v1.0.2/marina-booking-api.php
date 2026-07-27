@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Marina Booking API
  * Description: Secure REST API bridge for Booking Calendar / Booking Calendar Pro.
- * Version: 1.0.6
+ * Version: 1.0.7
  * Requires Plugins: booking
  * Author: Marina Park
  * Requires at least: 6.5
@@ -16,7 +16,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 final class Marina_Booking_API {
 
-	const VERSION   = '1.0.6';
+	const VERSION   = '1.0.7';
 	const SCHEMA_VERSION = '1.0.2';
 	const IDEMPOTENCY_TABLE_SUFFIX = 'marina_booking_api_idempotency';
 	const NAMESPACE = 'marina-booking/v1';
@@ -1173,11 +1173,6 @@ final class Marina_Booking_API {
 
 		$wpdb->query( 'COMMIT' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
 		if ( array_key_exists( 'note', $payload ) && ! hash_equals( $current_note, $note ) ) {
-			do_action(
-				'wpbc_set_booking_note',
-				array( 'booking_id' => $booking_id, 'note' => $note ),
-				array( 'after_action_result' => true )
-			);
 			self::audit( 'booking_note_updated', $booking_id );
 		}
 
@@ -1399,11 +1394,6 @@ final class Marina_Booking_API {
 			return new WP_Error( 'marina_booking_api_note_failed', 'Could not update the booking note.', array( 'status' => 500 ) );
 		}
 
-		do_action(
-			'wpbc_set_booking_note',
-			array( 'booking_id' => $booking_id, 'note' => $note ),
-			array( 'after_action_result' => true )
-		);
 		self::audit( 'booking_note_updated', $booking_id );
 		return self::response( array( 'booking_id' => $booking_id, 'note' => $note ) );
 	}
@@ -1473,8 +1463,6 @@ final class Marina_Booking_API {
 			}
 		}
 		$wpdb->query( 'COMMIT' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
-		do_action( 'wpbc_booking_action__set_booking_cost', $booking_id, $deposit, isset( $booking['cost'] ) ? (float) $booking['cost'] : 0 );
-		do_action( 'wpbc_set_booking_note', array( 'booking_id' => $booking_id, 'note' => $note ), array( 'after_action_result' => true ) );
 		self::audit( 'booking_deposit_updated', $booking_id );
 		return self::response( array( 'booking_id' => $booking_id, 'deposit' => $deposit, 'total' => $total, 'balance' => $balance, 'note' => $note, 'formatted' => array( 'deposit' => self::format_booking_cost( $deposit, isset( $booking['booking_type'] ) ? $booking['booking_type'] : 0 ), 'total' => self::format_booking_cost( $total, isset( $booking['booking_type'] ) ? $booking['booking_type'] : 0 ), 'balance' => self::format_booking_cost( $balance, isset( $booking['booking_type'] ) ? $booking['booking_type'] : 0 ) ) ) );
 	}

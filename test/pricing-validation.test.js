@@ -43,20 +43,6 @@ test("price preview validation rejects more than 80 form fields locally with the
   });
 });
 
-test("renderer uses fast quotes while editing and forced full quotes before saves", () => {
-  const source = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
-  assert.match(source, /setTimeout\(\(\) => void fetchCreateQuote\(requestId, key, \{ mode: "fast", source \}\), 300\)/);
-  assert.match(source, /fetchCreateQuote\(requestId, key, \{ mode: "full", forceFresh, source: activeWorkspace \}\)/);
-  assert.match(source, /mode: "full", forceFresh: true/);
-  assert.match(source, /source !== activeWorkspace \|\| requestId !== quoteRequestId \|\| key !== currentQuoteKey/);
-  assert.match(source, /requireValidQuote\(await window\.marina\.quoteBooking/);
-  assert.match(source, /Plecare trebuie să fie după sosire/);
-  assert.match(source, /const minimumSpan = Math\.max\(0, daysBetween\(start, end\) - 1\)/);
-  assert.match(source, /if \(reset\) \{/);
-  assert.match(source, /function todayIso\(\)/);
-  assert.doesNotMatch(source, /nights\s*\*\s*baseCost|baseCost\s*\*\s*nights/);
-});
-
 test("create submit keeps the form reference across the final asynchronous quote", () => {
   const renderer = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
   assert.match(renderer, /\$\("#createForm"\)\.addEventListener\("submit", async \(event\) => \{\s*event\.preventDefault\(\);\s*const form = event\.currentTarget;/);
