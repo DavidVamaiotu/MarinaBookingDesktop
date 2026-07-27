@@ -67,7 +67,7 @@ Pe Galaxy Z Fold 7 aplicația se adaptează automat atât ecranului exterior, c�
 ### Windows
 
 1. Generează installerul cu `npm run dist` pe Windows sau într-un mediu care poate construi NSIS.
-2. Rulează `dist-electron/MarinaBookingDesktop-Setup-1.0.21.exe`.
+2. Rulează `dist-electron/MarinaBookingDesktop-Setup-1.0.22.exe`.
 3. Installerul este per utilizator și nu cere drepturi de administrator. După instalare, aplicația pornește automat.
 4. Deschide **Setări** și configurează conexiunile **Camere** și **Camping**.
 

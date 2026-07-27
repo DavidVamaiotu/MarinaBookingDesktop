@@ -51,11 +51,12 @@ test("a recalculated note uses the authoritative deposit without deleting unrela
   const calls = [];
   const paymentSnapshots = new Map();
   const { recalculatedBookingNote } = evaluate(
-    ["recalculatedBookingNote"],
+    ["loadAuthoritativePayment", "quoteWithAuthoritativeDeposit", "recalculatedBookingNote"],
     "({ recalculatedBookingNote })",
     {
       PricingNote,
       paymentSnapshots,
+      detailsPaymentLoad: null,
       window: {
         marina: {
           async getPayment(localId, options) {
@@ -80,11 +81,12 @@ test("a recalculated note uses the authoritative deposit without deleting unrela
   assert.equal(paymentSnapshots.get("booking-1").deposit, 75);
 
   const rejecting = evaluate(
-    ["recalculatedBookingNote"],
+    ["loadAuthoritativePayment", "quoteWithAuthoritativeDeposit", "recalculatedBookingNote"],
     "recalculatedBookingNote",
     {
       PricingNote,
       paymentSnapshots: new Map(),
+      detailsPaymentLoad: null,
       window: { marina: { async getPayment() { return { deposit: 250 }; } } }
     }
   );
@@ -93,11 +95,12 @@ test("a recalculated note uses the authoritative deposit without deleting unrela
 
 test("a recalculated pricing line is appended when the internal note has no saved price", async () => {
   const recalculatedBookingNote = evaluate(
-    ["recalculatedBookingNote"],
+    ["loadAuthoritativePayment", "quoteWithAuthoritativeDeposit", "recalculatedBookingNote"],
     "recalculatedBookingNote",
     {
       PricingNote,
       paymentSnapshots: new Map(),
+      detailsPaymentLoad: null,
       window: { marina: { async getPayment() { return { deposit: 25 }; } } }
     }
   );
@@ -110,6 +113,74 @@ test("a recalculated pricing line is appended when the internal note has no save
   );
 
   assert.equal(note, "Păstrează această observație.\nCost total: 100 RON, Depozit: 25 RON, Rest: 75 RON");
+});
+
+test("live repricing reuses the payment snapshot while Save forces a fresh database read", async () => {
+  let reads = 0;
+  const sandbox = {
+    detailsPaymentLoad: null,
+    paymentSnapshots: new Map(),
+    window: {
+      marina: {
+        async getPayment() {
+          reads += 1;
+          return { deposit: reads === 1 ? 40 : 45 };
+        }
+      }
+    }
+  };
+  const quoteWithAuthoritativeDeposit = evaluate(
+    ["loadAuthoritativePayment", "quoteWithAuthoritativeDeposit"],
+    "quoteWithAuthoritativeDeposit",
+    sandbox
+  );
+  const booking = { localId: "booking-1" };
+
+  const first = await quoteWithAuthoritativeDeposit(booking, { total: 200 }, "rooms");
+  const second = await quoteWithAuthoritativeDeposit(booking, { total: 250 }, "rooms");
+  const fresh = await quoteWithAuthoritativeDeposit(booking, { total: 250 }, "rooms", { forceFresh: true });
+
+  assert.equal(reads, 2);
+  assert.equal(first.deposit, 40);
+  assert.equal(second.deposit, 40);
+  assert.equal(second.balance, 210);
+  assert.equal(fresh.deposit, 45);
+  assert.equal(fresh.balance, 205);
+});
+
+test("Edit Client displays the recalculated total with the authoritative database deposit", async () => {
+  const sandbox = {
+    activeWorkspace: "rooms",
+    selectedBookingId: "booking-1",
+    quoteRequestId: 7,
+    quoteState: "stale",
+    createQuote: null,
+    createQuoteKey: "",
+    window: {
+      marina: {
+        async quoteBooking() {
+          return { mode: "fast", valid: true, total: 300, deposit: 150, balance: 150 };
+        }
+      }
+    },
+    calendarForm: () => ({ id: "detailsForm" }),
+    setCreatePricing() {},
+    renderCreateSummary() {},
+    quoteInput: () => ({}),
+    currentQuoteKey: () => "quote-key",
+    editingDetails: () => true,
+    bookingById: () => ({ localId: "booking-1" }),
+    async quoteWithAuthoritativeDeposit(_booking, quote) {
+      return { ...quote, deposit: 80, balance: 220 };
+    },
+    renderQuoteBreakdown() {}
+  };
+  const fetchCreateQuote = evaluate(["fetchCreateQuote"], "fetchCreateQuote", sandbox);
+
+  assert.equal(await fetchCreateQuote(7, "quote-key", { source: "rooms" }), true);
+  assert.equal(sandbox.createQuote.total, 300);
+  assert.equal(sandbox.createQuote.deposit, 80);
+  assert.equal(sandbox.createQuote.balance, 220);
 });
 
 test("calendar invalidation cancels timers, advances request generations, and clears quote cache", () => {
@@ -264,7 +335,7 @@ test("save preserves the old note by default and persists an automatically selec
   const preserving = saveHarness();
   await preserving.saveBookingDetails(preserving.booking, preserving.form);
   assert.equal(preserving.calls[0][2].note, "Nota veche fără preț");
-  assert.deepEqual(preserving.events, ["close", "save"]);
+  assert.deepEqual(preserving.events, ["save", "close"]);
   assert.equal(preserving.closeCount(), 1);
 
   const replacing = saveHarness({ replaceNoteWithPrice: true });
@@ -274,11 +345,14 @@ test("save preserves the old note by default and persists an automatically selec
   assert.equal(replacing.closeCount(), 1);
 });
 
-test("Edit Client closes before saving and a failed request is reported after dismissal", async () => {
+test("a failed Edit Client save leaves the sidebar and draft intact", async () => {
   const harness = saveHarness({ replaceNoteWithPrice: true, failSave: true });
 
   await assert.rejects(() => harness.saveBookingDetails(harness.booking, harness.form), /save failed/);
 
-  assert.deepEqual(harness.events, ["close", "save"]);
-  assert.equal(harness.closeCount(), 1);
+  assert.deepEqual(harness.events, ["save"]);
+  assert.equal(harness.closeCount(), 0);
+  assert.equal(harness.form.elements.note.value, "Nota veche fără preț");
+  assert.equal(harness.form.elements.start.value, "2026-08-04");
+  assert.equal(harness.form.elements.end.value, "2026-08-06");
 });

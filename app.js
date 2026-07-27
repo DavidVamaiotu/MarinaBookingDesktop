@@ -145,6 +145,7 @@ let selectedBookingView = "";
 const paymentSnapshots = new Map();
 const paymentSnapshotErrors = new Map();
 const paymentSnapshotLoading = new Set();
+let detailsPaymentLoad = null;
 let dragState = null;
 let availabilityTimer = null;
 let availabilityRequestId = 0;
@@ -1415,8 +1416,28 @@ function createPricingNote(quote) {
   return PricingNote.format(quote);
 }
 
-async function recalculatedBookingNote(booking, quote, source, currentNote = booking.note) {
-  const snapshot = await window.marina.getPayment(booking.localId, { source });
+async function loadAuthoritativePayment(booking, source, { forceFresh = false } = {}) {
+  const bookingId = booking.localId;
+  if (!forceFresh && detailsPaymentLoad?.bookingId === bookingId && detailsPaymentLoad.source === source) {
+    return detailsPaymentLoad.promise;
+  }
+  const load = { bookingId, source, promise: null };
+  load.promise = window.marina.getPayment(bookingId, { source }).then(
+    (snapshot) => {
+      if (detailsPaymentLoad === load) paymentSnapshots.set(bookingId, snapshot);
+      return snapshot;
+    },
+    (error) => {
+      if (detailsPaymentLoad === load) detailsPaymentLoad = null;
+      throw error;
+    }
+  );
+  detailsPaymentLoad = load;
+  return load.promise;
+}
+
+async function quoteWithAuthoritativeDeposit(booking, quote, source, { forceFresh = false } = {}) {
+  const snapshot = await loadAuthoritativePayment(booking, source, { forceFresh });
   const total = Number(quote?.total);
   const rawDeposit = snapshot?.deposit;
   const deposit = Number(rawDeposit);
@@ -1426,12 +1447,16 @@ async function recalculatedBookingNote(booking, quote, source, currentNote = boo
   if (deposit > total) {
     throw new Error("Avansul actual depășește noul cost total. Ajustează avansul înainte de înlocuirea notei.");
   }
-  paymentSnapshots.set(booking.localId, snapshot);
   const balance = Math.round((total - deposit) * 100) / 100;
-  const pricingLine = PricingNote.format({ total, deposit, balance });
+  return { ...quote, total, deposit, balance };
+}
+
+async function recalculatedBookingNote(booking, quote, source, currentNote = booking.note) {
+  const authoritativeQuote = await quoteWithAuthoritativeDeposit(booking, quote, source, { forceFresh: true });
+  const pricingLine = PricingNote.format(authoritativeQuote);
   const note = String(currentNote || "");
   return PricingNote.parse(note)
-    ? PricingNote.update(note, deposit, total).note
+    ? PricingNote.update(note, authoritativeQuote.deposit, authoritativeQuote.total).note
     : `${note}${note && !note.endsWith("\n") ? "\n" : ""}${pricingLine}`;
 }
 
@@ -1440,6 +1465,7 @@ function invalidateCalendarRequests() {
   clearTimeout(quoteTimer);
   availabilityRequestId += 1;
   quoteRequestId += 1;
+  detailsPaymentLoad = null;
   void window.marina.clearQuoteCache();
 }
 
@@ -1689,8 +1715,15 @@ async function fetchCreateQuote(requestId, key, { mode = "fast", forceFresh = fa
       renderCreateSummary();
       return false;
     }
+    const editing = editingDetails();
+    const booking = editing ? bookingById(selectedBookingId) : null;
+    if (editing && !booking) return false;
+    const displayedQuote = booking
+      ? await quoteWithAuthoritativeDeposit(booking, result, source)
+      : result;
+    if (source !== activeWorkspace || requestId !== quoteRequestId || key !== currentQuoteKey(form)) return false;
     quoteState = "fresh";
-    createQuote = { ...result, valid: true };
+    createQuote = { ...displayedQuote, valid: true };
     createQuoteKey = key;
     setCreatePricing(mode === "full" ? "Preț complet confirmat de Booking Calendar." : "Preț calculat de Booking Calendar.", "available");
     if (!editingDetails()) renderQuoteBreakdown();
@@ -1990,6 +2023,7 @@ function populateDetails(booking, reset = true) {
   if (reset) invalidateCalendarRequests();
   selectedBookingId = booking.localId;
   selectedBookingView = "edit";
+  if (reset) void loadAuthoritativePayment(booking, activeWorkspace).catch(() => {});
   bookingMenu.hidden = true;
   const form = $("#detailsForm");
   const approved = booking.status === "approved";
@@ -2508,8 +2542,8 @@ async function saveBookingDetails(booking, form) {
     if (source !== activeWorkspace || selectedBookingId !== booking.localId) throw workspaceChangedError();
     const formData = detailsFormData(booking, form);
     const outboundFormData = BookingFields.prepareFormData(formData, booking.resourceId);
-    closeBookingOverlays();
     await runApiAction("editBooking", booking.localId, { resourceId, sourceResourceId: booking.resourceId, dates, formData: outboundFormData, bookingFormType, note, sendEmail: Boolean(form.elements.sendEmail.checked), source });
+    if (source === activeWorkspace && selectedBookingId === booking.localId && selectedBookingView === "edit") closeBookingOverlays();
   });
 }
 
