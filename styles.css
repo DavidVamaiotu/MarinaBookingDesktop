@@ -262,32 +262,34 @@ html,body{width:100%;height:100%;overflow:hidden}*{box-sizing:border-box}body{ma
 /* Camping has only two short category labels, so its sticky name column can stay compact. */
 .timeline-shell.is-camping-workspace{--timeline-unit-width:112px}
 
-/* Separate room availability page. It replaces its month instead of scrolling through dates. */
+/* Separate room availability page. Dates use a bounded, continuously scrolling window. */
 .availability-page{display:grid;grid-template-rows:auto minmax(0,1fr);min-height:0;height:100%;overflow:hidden}
 .availability-page[hidden],#timelineHeader[hidden],#timelineShell[hidden],#cameraViewport[hidden]{display:none!important}
 .availability-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 2px 12px}
 .availability-header h1{margin:3px 0 0;font-size:21px;font-weight:620}
 .availability-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 .availability-actions>button{min-width:38px;padding:7px 11px;border:1px solid var(--line);border-radius:9px;background:#faf9f4;color:#26322f}
-.availability-actions>strong{min-width:155px;text-align:center;text-transform:capitalize}
 .availability-legend{display:flex;align-items:center;gap:6px;margin-right:8px;color:var(--muted);font-size:11px}
 #closeAvailability{margin-right:auto}
 .availability-legend i{width:16px;height:16px;border:1px solid #39752f;background:#4f941f}
-.availability-grid{--availability-days:31;display:grid;grid-template-columns:minmax(112px,170px) repeat(var(--availability-days),minmax(0,1fr));grid-auto-rows:auto;align-content:start;min-width:0;overflow-x:hidden;overflow-y:auto;touch-action:pan-y;border:1px solid #64747a;border-radius:5px;background:#fff;font-family:Arial,sans-serif}
-.availability-corner,.availability-month,.availability-date-number,.availability-room,.availability-cell{min-width:0;border-right:1px solid #718087;border-bottom:1px solid #718087}
-.availability-corner,.availability-month{position:sticky;z-index:3;background:#bfe2ef;color:#17252b;text-align:center}
+.availability-grid{--availability-days:84;--availability-resource-width:170px;--availability-day-width:36px;display:grid;grid-template-columns:var(--availability-resource-width) repeat(var(--availability-days),var(--availability-day-width));grid-auto-rows:auto;align-content:start;min-width:0;overflow:auto;overscroll-behavior:contain;scroll-behavior:auto;touch-action:pan-x pan-y;border:1px solid #64747a;border-radius:5px;background:#fff;font-family:Arial,sans-serif}
+.availability-corner,.availability-months,.availability-month,.availability-date-number,.availability-room,.availability-cell{min-width:0;border-right:1px solid #718087;border-bottom:1px solid #718087}
 .availability-corner{left:0;top:0;z-index:5;grid-column:1;grid-row:1;display:grid;place-items:center;padding:5px;font-size:11px;font-weight:600}
-.availability-month{top:0;grid-column:2/-1;display:grid;place-items:center;min-height:27px;font-size:12px;font-weight:600;text-transform:capitalize}
+.availability-corner,.availability-months{position:sticky;top:0;background:#bfe2ef;color:#17252b;text-align:center}
+.availability-months{z-index:3;grid-column:2/-1;display:grid;grid-template-columns:repeat(var(--availability-days),var(--availability-day-width));overflow:hidden}
+.availability-month{display:grid;place-items:center;min-height:27px;border-bottom:0;font-size:12px;font-weight:600;text-transform:capitalize;box-shadow:inset 2px 0 #437581}
+.availability-month-days-1{grid-column:span 1}.availability-month-days-2{grid-column:span 2}.availability-month-days-3{grid-column:span 3}.availability-month-days-4{grid-column:span 4}.availability-month-days-5{grid-column:span 5}.availability-month-days-6{grid-column:span 6}.availability-month-days-7{grid-column:span 7}.availability-month-days-8{grid-column:span 8}.availability-month-days-9{grid-column:span 9}.availability-month-days-10{grid-column:span 10}.availability-month-days-11{grid-column:span 11}.availability-month-days-12{grid-column:span 12}.availability-month-days-13{grid-column:span 13}.availability-month-days-14{grid-column:span 14}.availability-month-days-15{grid-column:span 15}.availability-month-days-16{grid-column:span 16}.availability-month-days-17{grid-column:span 17}.availability-month-days-18{grid-column:span 18}.availability-month-days-19{grid-column:span 19}.availability-month-days-20{grid-column:span 20}.availability-month-days-21{grid-column:span 21}.availability-month-days-22{grid-column:span 22}.availability-month-days-23{grid-column:span 23}.availability-month-days-24{grid-column:span 24}.availability-month-days-25{grid-column:span 25}.availability-month-days-26{grid-column:span 26}.availability-month-days-27{grid-column:span 27}.availability-month-days-28{grid-column:span 28}.availability-month-days-29{grid-column:span 29}.availability-month-days-30{grid-column:span 30}.availability-month-days-31{grid-column:span 31}
 .availability-date-number{display:grid;place-items:center;min-height:22px;padding:2px 0;background:#12c4c9;color:#10262b;font-size:10px;font-weight:600;line-height:1}
 .availability-room{position:sticky;left:0;z-index:2;display:grid;grid-row:span 2;align-items:center;align-self:stretch;padding:5px 8px;background:#edf0f1;color:#27343a;font-size:11px;font-weight:600;line-height:1.15;overflow-wrap:anywhere}
 .availability-cell{display:grid;place-items:center;min-height:37px;background:#fff;color:#13231b;font-size:11px;font-weight:600}
 .availability-cell[data-am="occupied"][data-pm="occupied"]{background:#4f941f}
 .availability-cell[data-am="available"][data-pm="occupied"]{background:linear-gradient(135deg,#fff 0 49%,#4f941f 51% 100%)}
 .availability-cell[data-am="occupied"][data-pm="available"]{background:linear-gradient(135deg,#4f941f 0 49%,#fff 51% 100%)}
+.availability-date-number.is-month-start,.availability-cell.is-month-start{border-left:2px solid #437581}
 @media(max-width:900px){
   .availability-header{display:grid}.availability-header>div:first-child{display:none}.availability-actions{justify-content:center}
-  .availability-actions>strong{min-width:125px}.availability-legend{margin-right:auto}
-  .availability-grid{grid-template-columns:minmax(86px,112px) repeat(var(--availability-days),minmax(0,1fr))}
+  .availability-legend{margin-right:auto}
+  .availability-grid{--availability-resource-width:112px;--availability-day-width:28px}
   .availability-room{padding:4px;font-size:9px}.availability-date-number{font-size:8px}.availability-cell{font-size:9px}
 }
 .is-mobile-app .availability-cell{position:relative}

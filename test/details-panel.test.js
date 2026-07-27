@@ -42,6 +42,26 @@ test("reservation editor reuses the create calendar, availability, and quote flo
   assert.match(appSource, /\$\("#detailsCalendar"\)\.addEventListener\("click", handleBookingCalendarClick\)/);
 });
 
+test("changing the edited reservation resource keeps free dates and clears confirmed conflicts", () => {
+  const handlerStart = appSource.indexOf('$("#detailsForm").elements.resourceId.addEventListener("change"');
+  const handlerEnd = appSource.indexOf('$("#createQuoteDetails").addEventListener', handlerStart);
+  const handlerSource = appSource.slice(handlerStart, handlerEnd);
+  assert.ok(handlerStart >= 0 && handlerEnd > handlerStart);
+  assert.doesNotMatch(handlerSource, /createSelectionStart = ""/);
+  assert.doesNotMatch(handlerSource, /createSelectionEnd = ""/);
+  assert.match(handlerSource, /scheduleAvailabilityCheck\(\{ resetSelectionOnUnavailable: true \}\)/);
+  assert.match(handlerSource, /schedulePriceCheck\(\)/);
+
+  const availabilityStart = appSource.indexOf("function resetCalendarSelection");
+  const availabilityEnd = appSource.indexOf("function bookingField", availabilityStart);
+  const availabilitySource = appSource.slice(availabilityStart, availabilityEnd);
+  assert.match(availabilitySource, /createSelectionStart = ""/);
+  assert.match(availabilitySource, /createSelectionEnd = ""/);
+  assert.match(availabilitySource, /if \(!result\.available && resetSelectionOnUnavailable\)/);
+  assert.match(availabilitySource, /resetCalendarSelection\("Datele selectate sunt deja ocupate în noua unitate\./);
+  assert.match(availabilitySource, /excludeBookingId/);
+});
+
 test("reservation editor reference styling remains scoped and responsive", () => {
   assert.match(stylesSource, /#detailsPanel\{width:min\(580px,60vw\)/);
   assert.match(stylesSource, /#detailsPanel \.panel-form input,[^}]*font-size:14\.5px/);

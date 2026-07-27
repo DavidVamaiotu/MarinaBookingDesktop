@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'">
   <title>Availability timeline preview</title>
   <link rel="stylesheet" href="../../styles.css">
 </head>
@@ -16,12 +17,9 @@
       <div id="previewExisting" class="empty-state" hidden>Calendarul existent</div>
       <section class="availability-page" id="availabilityPage" aria-labelledby="availabilityTitle">
         <header class="availability-header">
-          <div><p>Vizualizare lunară</p><h1 id="availabilityTitle">Disponibilitate camere</h1></div>
+          <div><p>Vizualizare continuă</p><h1 id="availabilityTitle">Disponibilitate camere</h1></div>
           <div class="availability-actions">
             <span class="availability-legend"><i></i>Ocupat</span>
-            <button id="availabilityPrev" type="button" aria-label="Luna precedentă">‹</button>
-            <strong id="availabilityMonthLabel"></strong>
-            <button id="availabilityNext" type="button" aria-label="Luna următoare">›</button>
           </div>
         </header>
         <div class="availability-grid" id="availabilityGrid" role="table"></div>

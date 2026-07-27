@@ -89,19 +89,15 @@ test("high resolution horizontal scrolling preserves the full trackpad delta", (
   assert.doesNotMatch(wheelSource, /Math\.min\(Math\.max\(horizontal/);
 });
 
-test("availability timeline swipes switch one month without blocking vertical scrolling", () => {
-  const swipeSource = appSource.slice(appSource.indexOf("function beginAvailabilitySwipe"), appSource.indexOf("function renderCommands"));
-  assert.match(appSource, /const AVAILABILITY_SWIPE_THRESHOLD = 50/);
-  assert.match(swipeSource, /Math\.abs\(deltaX\) > Math\.abs\(deltaY\) \? "horizontal" : "vertical"/);
-  assert.match(swipeSource, /if \(availabilitySwipeState\.mode === "horizontal"\) event\.preventDefault\(\)/);
-  assert.match(swipeSource, /setAvailabilityMonth\(addMonths\(availabilityMonth, deltaX < 0 \? 1 : -1\)\)/);
-  assert.match(swipeSource, /function beginAvailabilitySwipe\(event\) \{\s*if \(!availabilityViewActive \|\| event\.touches\.length !== 1\)[\s\S]*?return;\s*}\s*event\.stopPropagation\(\)/);
-  assert.match(swipeSource, /function moveAvailabilitySwipe\(event\) \{\s*if \(!availabilitySwipeState \|\| event\.touches\.length !== 1\)[\s\S]*?return;\s*}\s*event\.stopPropagation\(\)/);
-  assert.match(swipeSource, /const swipe = availabilitySwipeState;\s*availabilitySwipeState = null;\s*if \(!swipe\) return;\s*event\.stopPropagation\(\)/);
-  assert.match(appSource, /availabilityGrid\.addEventListener\("touchstart", beginAvailabilitySwipe, \{ passive: true \}\)/);
-  assert.match(appSource, /availabilityGrid\.addEventListener\("touchmove", moveAvailabilitySwipe, \{ passive: false \}\)/);
-  assert.match(appSource, /availabilityGrid\.addEventListener\("touchcancel", cancelAvailabilitySwipe, \{ passive: true \}\)/);
-  assert.match(stylesSource, /\.availability-grid\{[^}]*touch-action:pan-y/);
+test("availability timeline uses native two-axis scrolling and lazy edge shifts", () => {
+  const availabilitySource = appSource.slice(appSource.indexOf("function availabilityDayWidth"), appSource.indexOf("function renderCommands"));
+  assert.match(appSource, /const AVAILABILITY_WINDOW_DAYS = 84/);
+  assert.match(availabilitySource, /requestAnimationFrame\(\(\) => \{\s*availabilityScrollFrame = null;\s*recenterAvailabilityWindow\(\)/);
+  assert.match(availabilitySource, /shiftAvailabilityWindow\(AVAILABILITY_WINDOW_SHIFT_DAYS\)/);
+  assert.match(availabilitySource, /shiftAvailabilityWindow\(-AVAILABILITY_WINDOW_SHIFT_DAYS\)/);
+  assert.match(appSource, /availabilityGrid\.addEventListener\("scroll", handleAvailabilityScroll, \{ passive: true \}\)/);
+  assert.doesNotMatch(appSource, /beginAvailabilitySwipe|moveAvailabilitySwipe|endAvailabilitySwipe|cancelAvailabilitySwipe/);
+  assert.match(stylesSource, /\.availability-grid\{[^}]*overflow:auto[^}]*touch-action:pan-x pan-y/);
 });
 
 test("each stacked reservation lane receives its own compact date strip", () => {

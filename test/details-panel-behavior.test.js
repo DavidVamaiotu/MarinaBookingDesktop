@@ -193,6 +193,63 @@ test("calendar invalidation cancels timers, advances request generations, and cl
   assert.equal(sandbox.createQuoteKey, "");
 });
 
+test("resource availability keeps selected dates unless WordPress confirms a conflict", async () => {
+  const form = {
+    elements: {
+      resourceId: { value: "22" },
+      start: { value: "2026-08-10" },
+      end: { value: "2026-08-13" }
+    }
+  };
+  let pendingCheck;
+  let resetArgs = null;
+  const availabilityCalls = [];
+  const sandbox = {
+    availabilityTimer: null,
+    availabilityRequestId: 0,
+    availabilityState: "idle",
+    activeWorkspace: "rooms",
+    selectedBookingId: "local-71",
+    clearTimeout() {},
+    setTimeout(callback) {
+      pendingCheck = callback();
+      return 1;
+    },
+    calendarForm() { return form; },
+    editingDetails() { return true; },
+    bookingById() { return { serverId: 71 }; },
+    rangeDates(start, end) { return [start, end]; },
+    BookingCalendar: { toStayDateTimes(dates) { return dates; } },
+    window: {
+      marina: {
+        async checkAvailability(input) {
+          availabilityCalls.push(input);
+          return { available: false };
+        }
+      }
+    },
+    setCreateAvailability() {},
+    updateCreateSubmitState() {},
+    resetCalendarSelection(...args) { resetArgs = args; }
+  };
+  const scheduleAvailabilityCheck = evaluate(
+    ["scheduleAvailabilityCheck"],
+    "scheduleAvailabilityCheck",
+    sandbox
+  );
+
+  scheduleAvailabilityCheck({ resetSelectionOnUnavailable: true });
+  await pendingCheck;
+
+  assert.equal(availabilityCalls.length, 1);
+  assert.equal(availabilityCalls[0].resourceId, 22);
+  assert.equal(availabilityCalls[0].excludeBookingId, 71);
+  assert.deepEqual(resetArgs, [
+    "Datele selectate sunt deja ocupate în noua unitate. Selectați alt interval.",
+    "unavailable"
+  ]);
+});
+
 test("opening Add New Reservation dismisses the active booking editor before using shared calendar state", () => {
   const events = [];
   const form = {

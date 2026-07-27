@@ -31,7 +31,11 @@ const MIN_CAMERA_SCALE = 1;
 const MAX_CAMERA_SCALE = 2;
 const PINCH_DIRECTION_THRESHOLD = 8;
 const CAMERA_PAN_THRESHOLD = 4;
-const AVAILABILITY_SWIPE_THRESHOLD = 50;
+const AVAILABILITY_WINDOW_DAYS = 84;
+const AVAILABILITY_WINDOW_SHIFT_DAYS = 35;
+const AVAILABILITY_EDGE_DAYS = 14;
+const MIN_AVAILABILITY_DAY_WIDTH = 24;
+const MAX_AVAILABILITY_DAY_WIDTH = 44;
 const ROW_BASE = 44;
 const LANE_HEIGHT = 34;
 const DATE_GRID_CHUNK_DAYS = 28;
@@ -45,10 +49,13 @@ let activeWorkspace = "rooms";
 let workspaceSwitchId = 0;
 let duplicateBookingId = null;
 let duplicateWorkspace = null;
-let availabilityMonth = monthStart(todayIso());
 let availabilityViewActive = false;
 let availabilityVisited = false;
-let availabilitySwipeState = null;
+let availabilityWindowStart = todayIso();
+let availabilityWindowEnd = iso(addDays(availabilityWindowStart, AVAILABILITY_WINDOW_DAYS - 1));
+let availabilityScrollLeft = 0;
+let availabilityScrollFrame = null;
+let availabilityLastShiftAt = 0;
 
 function updateWorkspaceUi() {
   const camping = activeWorkspace === "camping";
@@ -1004,30 +1011,60 @@ function availabilityCellLabel(cell) {
   return `${cell.date}, disponibil`;
 }
 
-function renderAvailabilityTimeline() {
+function availabilityDayWidth() {
+  const width = Number.parseFloat(getComputedStyle(availabilityGrid).getPropertyValue("--availability-day-width"));
+  return Number.isFinite(width) ? width : MIN_AVAILABILITY_DAY_WIDTH;
+}
+
+function updateAvailabilityDayWidth() {
+  const styles = getComputedStyle(availabilityGrid);
+  const resourceWidth = Number.parseFloat(styles.getPropertyValue("--availability-resource-width")) || 170;
+  const availableWidth = Math.max(0, availabilityGrid.clientWidth - resourceWidth);
+  const width = Math.floor(Math.min(MAX_AVAILABILITY_DAY_WIDTH, Math.max(MIN_AVAILABILITY_DAY_WIDTH, availableWidth / TARGET_VISIBLE_DAYS)));
+  availabilityGrid.style.setProperty("--availability-day-width", `${width}px`);
+  return width;
+}
+
+function availabilityVisibleDate() {
+  const offset = Math.max(0, Math.floor(availabilityGrid.scrollLeft / availabilityDayWidth()));
+  return iso(addDays(availabilityWindowStart, Math.min(AVAILABILITY_WINDOW_DAYS - 1, offset)));
+}
+
+function availabilityMonthHeader(view) {
+  const months = AvailabilityTimeline.monthSegments(view.dates).map((segment) =>
+    `<div class="availability-month availability-month-days-${segment.length}" role="columnheader">${escapeHtml(formatMonth(segment.start))}</div>`
+  ).join("");
+  return `<div class="availability-months" role="row">${months}</div>`;
+}
+
+function renderAvailabilityTimeline({ desiredLeft = null } = {}) {
   if (!availabilityViewActive) return;
-  const fullView = AvailabilityTimeline.buildMonth(state.resources, state.bookings, availabilityMonth);
-  const view = AvailabilityTimeline.fromDate(fullView, todayIso());
+  const previousLeft = desiredLeft ?? availabilityGrid.scrollLeft ?? availabilityScrollLeft;
+  const view = AvailabilityTimeline.buildRange(state.resources, state.bookings, availabilityWindowStart, availabilityWindowEnd);
   const weekdayInitials = ["D", "L", "M", "M", "J", "V", "S"];
+  updateAvailabilityDayWidth();
   availabilityGrid.style.setProperty("--availability-days", view.dates.length);
-  $("#availabilityMonthLabel").textContent = formatMonth(availabilityMonth);
-  $("#availabilityPrev").disabled = availabilityMonth <= monthStart(todayIso());
-  const header = `<div class="availability-corner" role="columnheader">Cameră</div><div class="availability-month" role="columnheader">${escapeHtml(formatMonth(availabilityMonth))}</div>`;
-  const rows = view.rows.map((row) => `<div class="availability-room" role="rowheader">${escapeHtml(row.title)}</div>${view.dates.map((date) => `<div class="availability-date-number" role="cell" aria-label="Ziua ${date.day}">${date.day}</div>`).join("")}${row.cells.map((cell, index) => {
+  const header = `<div class="availability-corner" role="columnheader">Cameră</div>${availabilityMonthHeader(view)}`;
+  const rows = view.rows.map((row) => `<div class="availability-room" role="rowheader">${escapeHtml(row.title)}</div>${view.dates.map((date) => `<div class="availability-date-number${date.day === 1 ? " is-month-start" : ""}" role="cell" aria-label="${escapeHtml(date.date)}">${date.day}</div>`).join("")}${row.cells.map((cell, index) => {
     const am = cell.am === "available" ? "available" : "occupied";
     const pm = cell.pm === "available" ? "available" : "occupied";
-    return `<div class="availability-cell" role="cell" data-date="${cell.date}" data-am="${am}" data-pm="${pm}" aria-label="${escapeHtml(availabilityCellLabel(cell))}"><span aria-hidden="true">${weekdayInitials[view.dates[index].weekday]}</span></div>`;
+    const boundary = view.dates[index].day === 1 ? " is-month-start" : "";
+    return `<div class="availability-cell${boundary}" role="cell" data-date="${cell.date}" data-am="${am}" data-pm="${pm}" aria-label="${escapeHtml(availabilityCellLabel(cell))}"><span aria-hidden="true">${weekdayInitials[view.dates[index].weekday]}</span></div>`;
   }).join("")}`).join("");
   availabilityGrid.innerHTML = view.rows.length ? header + rows : `${header}<p class="empty-state">Nu există camere în cache.</p>`;
+  availabilityGrid.scrollLeft = Math.max(0, previousLeft);
+  availabilityScrollLeft = availabilityGrid.scrollLeft;
 }
 
 function setAvailabilityView(show) {
   cancelDrag();
-  availabilitySwipeState = null;
   const wasActive = availabilityViewActive;
+  const availabilityAnchor = wasActive ? availabilityVisibleDate() : todayIso();
   availabilityViewActive = Boolean(show) && activeWorkspace === "rooms";
   if (availabilityViewActive && !availabilityVisited) {
-    availabilityMonth = monthStart(todayIso());
+    availabilityWindowStart = todayIso();
+    availabilityWindowEnd = iso(addDays(availabilityWindowStart, AVAILABILITY_WINDOW_DAYS - 1));
+    availabilityScrollLeft = 0;
     availabilityVisited = true;
   }
   timelineHeader.hidden = availabilityViewActive;
@@ -1037,71 +1074,55 @@ function setAvailabilityView(show) {
   openAvailability.setAttribute("aria-pressed", String(availabilityViewActive));
   if (availabilityViewActive) {
     closeBookingOverlays();
-    renderAvailabilityTimeline();
+    renderAvailabilityTimeline({ desiredLeft: availabilityScrollLeft });
   } else if (wasActive) {
-    setVisibleMonth(availabilityMonth);
+    setVisibleMonth(monthStart(availabilityAnchor));
   } else {
     renderTimeline();
   }
 }
 
-async function setAvailabilityMonth(month) {
-  const requestedMonth = monthStart(month);
-  const currentMonth = monthStart(todayIso());
-  availabilityMonth = requestedMonth < currentMonth ? currentMonth : requestedMonth;
-  renderAvailabilityTimeline();
-  const targetEnd = addDays(addMonths(availabilityMonth, 1), -1);
+async function ensureAvailabilityDataRange() {
   currentRange();
-  if (availabilityMonth >= windowStart && targetEnd <= windowEnd) return;
-  windowStart = addMonths(availabilityMonth, -Math.floor(TIMELINE_WINDOW_MONTHS / 2));
+  if (utcDate(availabilityWindowStart) >= windowStart && utcDate(availabilityWindowEnd) <= windowEnd) return;
+  windowStart = monthStart(availabilityWindowStart);
   currentRange();
-  await refreshRange({ force: false, quiet: false });
+  await refreshRange({ force: false, quiet: true });
   renderAvailabilityTimeline();
 }
 
-function beginAvailabilitySwipe(event) {
-  if (!availabilityViewActive || event.touches.length !== 1) {
-    availabilitySwipeState = null;
-    return;
-  }
-  event.stopPropagation();
-  availabilitySwipeState = {
-    startX: event.touches[0].clientX,
-    startY: event.touches[0].clientY,
-    mode: null
-  };
+function shiftAvailabilityWindow(dayDelta) {
+  const oldStart = availabilityWindowStart;
+  const earliest = utcDate(todayIso());
+  const requested = addDays(oldStart, dayDelta);
+  const nextStart = requested < earliest ? earliest : requested;
+  const actualDelta = daysBetween(oldStart, nextStart);
+  if (!actualDelta) return false;
+  const oldLeft = availabilityGrid.scrollLeft;
+  availabilityWindowStart = iso(nextStart);
+  availabilityWindowEnd = iso(addDays(nextStart, AVAILABILITY_WINDOW_DAYS - 1));
+  const nextLeft = Math.max(0, oldLeft - actualDelta * availabilityDayWidth());
+  renderAvailabilityTimeline({ desiredLeft: nextLeft });
+  availabilityLastShiftAt = performance.now();
+  void ensureAvailabilityDataRange();
+  return true;
 }
 
-function moveAvailabilitySwipe(event) {
-  if (!availabilitySwipeState || event.touches.length !== 1) {
-    if (event.touches.length !== 1) availabilitySwipeState = null;
-    return;
-  }
-  event.stopPropagation();
-  const deltaX = event.touches[0].clientX - availabilitySwipeState.startX;
-  const deltaY = event.touches[0].clientY - availabilitySwipeState.startY;
-  if (!availabilitySwipeState.mode && Math.max(Math.abs(deltaX), Math.abs(deltaY)) >= PINCH_DIRECTION_THRESHOLD) {
-    availabilitySwipeState.mode = Math.abs(deltaX) > Math.abs(deltaY) ? "horizontal" : "vertical";
-  }
-  if (availabilitySwipeState.mode === "horizontal") event.preventDefault();
+function recenterAvailabilityWindow() {
+  const maxScroll = Math.max(0, availabilityGrid.scrollWidth - availabilityGrid.clientWidth);
+  if (!maxScroll || performance.now() - availabilityLastShiftAt < 200) return;
+  const edge = Math.min(AVAILABILITY_EDGE_DAYS * availabilityDayWidth(), maxScroll * 0.25);
+  if (availabilityGrid.scrollLeft >= maxScroll - edge) shiftAvailabilityWindow(AVAILABILITY_WINDOW_SHIFT_DAYS);
+  else if (availabilityGrid.scrollLeft <= edge && utcDate(availabilityWindowStart) > utcDate(todayIso())) shiftAvailabilityWindow(-AVAILABILITY_WINDOW_SHIFT_DAYS);
 }
 
-function endAvailabilitySwipe(event) {
-  const swipe = availabilitySwipeState;
-  availabilitySwipeState = null;
-  if (!swipe) return;
-  event.stopPropagation();
-  if (swipe.mode !== "horizontal" || event.changedTouches.length !== 1) return;
-  const deltaX = event.changedTouches[0].clientX - swipe.startX;
-  const deltaY = event.changedTouches[0].clientY - swipe.startY;
-  if (Math.abs(deltaX) < AVAILABILITY_SWIPE_THRESHOLD || Math.abs(deltaX) <= Math.abs(deltaY)) return;
-  void setAvailabilityMonth(addMonths(availabilityMonth, deltaX < 0 ? 1 : -1));
-}
-
-function cancelAvailabilitySwipe(event) {
-  if (!availabilitySwipeState) return;
-  event.stopPropagation();
-  availabilitySwipeState = null;
+function handleAvailabilityScroll() {
+  availabilityScrollLeft = availabilityGrid.scrollLeft;
+  if (availabilityScrollFrame) return;
+  availabilityScrollFrame = requestAnimationFrame(() => {
+    availabilityScrollFrame = null;
+    recenterAvailabilityWindow();
+  });
 }
 
 function commandPayload(command) {
@@ -1757,7 +1778,18 @@ function requireValidQuote(result) {
   return result;
 }
 
-function scheduleAvailabilityCheck() {
+function resetCalendarSelection(message, type = "") {
+  clearTimeout(availabilityTimer);
+  availabilityRequestId += 1;
+  createSelectionStart = "";
+  createSelectionEnd = "";
+  availabilityState = "idle";
+  invalidateCreateQuote("Selectați datele pentru calcularea prețului.");
+  setCreateAvailability(message, type);
+  renderCreateCalendar();
+}
+
+function scheduleAvailabilityCheck({ resetSelectionOnUnavailable = false } = {}) {
   clearTimeout(availabilityTimer);
   const requestId = ++availabilityRequestId;
   if (activeWorkspace === "camping") {
@@ -1781,6 +1813,10 @@ function scheduleAvailabilityCheck() {
     try {
       const result = await window.marina.checkAvailability({ resourceId, dates: BookingCalendar.toStayDateTimes(rangeDates(start, end)), excludeBookingId, source });
       if (source !== activeWorkspace || requestId !== availabilityRequestId || Number(form.elements.resourceId.value) !== resourceId || form.elements.start.value !== start || form.elements.end.value !== end) return;
+      if (!result.available && resetSelectionOnUnavailable) {
+        resetCalendarSelection("Datele selectate sunt deja ocupate în noua unitate. Selectați alt interval.", "unavailable");
+        return;
+      }
       availabilityState = result.available ? "available" : "unavailable";
       setCreateAvailability(result.available ? "Datele sunt disponibile." : "Datele nu mai sunt disponibile.", result.available ? "available" : "unavailable");
       updateCreateSubmitState();
@@ -2423,12 +2459,7 @@ document.querySelector(".workspace-tabs").addEventListener("click", (event) => {
 });
 openAvailability.addEventListener("click", () => setAvailabilityView(!availabilityViewActive));
 $("#closeAvailability").addEventListener("click", () => setAvailabilityView(false));
-$("#availabilityPrev").addEventListener("click", () => { void setAvailabilityMonth(addMonths(availabilityMonth, -1)); });
-$("#availabilityNext").addEventListener("click", () => { void setAvailabilityMonth(addMonths(availabilityMonth, 1)); });
-availabilityGrid.addEventListener("touchstart", beginAvailabilitySwipe, { passive: true });
-availabilityGrid.addEventListener("touchmove", moveAvailabilitySwipe, { passive: false });
-availabilityGrid.addEventListener("touchend", endAvailabilitySwipe, { passive: true });
-availabilityGrid.addEventListener("touchcancel", cancelAvailabilitySwipe, { passive: true });
+availabilityGrid.addEventListener("scroll", handleAvailabilityScroll, { passive: true });
 $("#openCreate").addEventListener("click", () => openCreate());
 createDialog.addEventListener("close", () => {
   invalidateCalendarRequests();
@@ -2463,13 +2494,17 @@ $("#createForm").elements.extraBed.addEventListener("change", schedulePriceCheck
 $("#createForm").elements.vehiclePlate.addEventListener("input", schedulePriceCheck);
 $("#createForm").elements.electricity.addEventListener("change", schedulePriceCheck);
 $("#detailsForm").elements.resourceId.addEventListener("change", () => {
-  createSelectionStart = "";
-  createSelectionEnd = "";
-  fillGuestCounts($("#detailsForm"));
-  availabilityState = "idle";
-  setCreateAvailability("Selectați data sosirii și data plecării.");
-  invalidateCreateQuote("Selectați datele pentru calcularea prețului.");
+  const form = $("#detailsForm");
+  fillGuestCounts(form);
+  if (!createSelectionStart || !createSelectionEnd) {
+    resetCalendarSelection("Selectați data sosirii și data plecării.");
+    return;
+  }
+  availabilityState = "checking";
+  setCreateAvailability("Se verifică disponibilitatea în noua unitate…");
   renderCreateCalendar();
+  scheduleAvailabilityCheck({ resetSelectionOnUnavailable: true });
+  schedulePriceCheck();
 });
 $("#createQuoteDetails").addEventListener("click", async () => {
   const breakdown = $("#createQuoteBreakdown");
@@ -2870,6 +2905,12 @@ let resizeTimer = null;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
+    if (availabilityViewActive) {
+      const anchor = availabilityVisibleDate();
+      updateAvailabilityDayWidth();
+      renderAvailabilityTimeline({ desiredLeft: daysBetween(availabilityWindowStart, anchor) * availabilityDayWidth() });
+      return;
+    }
     const anchor = addDays(windowStart, Math.round(timelineScrollLeft() / dayWidth));
     renderTimeline({ preserveScroll: false });
     setTimelineScrollLeft(scrollLeftForDate(anchor));
