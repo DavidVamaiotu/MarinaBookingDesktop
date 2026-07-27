@@ -244,10 +244,41 @@ test("resource availability keeps selected dates unless WordPress confirms a con
   assert.equal(availabilityCalls.length, 1);
   assert.equal(availabilityCalls[0].resourceId, 22);
   assert.equal(availabilityCalls[0].excludeBookingId, 71);
-  assert.deepEqual(resetArgs, [
-    "Datele selectate sunt deja ocupate în noua unitate. Selectați alt interval.",
-    "unavailable"
-  ]);
+  assert.equal(resetArgs[0], "Datele selectate sunt deja ocupate în noua unitate. Selectați alt interval.");
+  assert.equal(resetArgs[1], "unavailable");
+  assert.equal(resetArgs[2].preserveDetailsSelection, true);
+});
+
+test("edit resource changes retry the preferred range and manual dates replace it", () => {
+  const sandbox = {
+    selectedBookingView: "edit",
+    createSelectionStart: "",
+    createSelectionEnd: "",
+    detailsPreferredSelection: { start: "2026-08-10", end: "2026-08-13" }
+  };
+  const { rememberDetailsSelection, restorePreferredDetailsSelection } = evaluate(
+    ["editingDetails", "rememberDetailsSelection", "restorePreferredDetailsSelection"],
+    "({ rememberDetailsSelection, restorePreferredDetailsSelection })",
+    sandbox
+  );
+
+  assert.equal(restorePreferredDetailsSelection(), true);
+  assert.equal(sandbox.createSelectionStart, "2026-08-10");
+  assert.equal(sandbox.createSelectionEnd, "2026-08-13");
+
+  sandbox.createSelectionStart = "2026-09-01";
+  sandbox.createSelectionEnd = "2026-09-04";
+  rememberDetailsSelection();
+  assert.equal(
+    JSON.stringify(sandbox.detailsPreferredSelection),
+    JSON.stringify({ start: "2026-09-01", end: "2026-09-04" })
+  );
+
+  sandbox.createSelectionStart = "";
+  sandbox.createSelectionEnd = "";
+  assert.equal(restorePreferredDetailsSelection(), true);
+  assert.equal(sandbox.createSelectionStart, "2026-09-01");
+  assert.equal(sandbox.createSelectionEnd, "2026-09-04");
 });
 
 test("opening Add New Reservation dismisses the active booking editor before using shared calendar state", () => {

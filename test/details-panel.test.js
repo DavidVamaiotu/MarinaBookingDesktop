@@ -42,13 +42,14 @@ test("reservation editor reuses the create calendar, availability, and quote flo
   assert.match(appSource, /\$\("#detailsCalendar"\)\.addEventListener\("click", handleBookingCalendarClick\)/);
 });
 
-test("changing the edited reservation resource keeps free dates and clears confirmed conflicts", () => {
+test("changing the edited reservation resource retries the preferred dates and remembers confirmed conflicts", () => {
   const handlerStart = appSource.indexOf('$("#detailsForm").elements.resourceId.addEventListener("change"');
   const handlerEnd = appSource.indexOf('$("#createQuoteDetails").addEventListener', handlerStart);
   const handlerSource = appSource.slice(handlerStart, handlerEnd);
   assert.ok(handlerStart >= 0 && handlerEnd > handlerStart);
   assert.doesNotMatch(handlerSource, /createSelectionStart = ""/);
   assert.doesNotMatch(handlerSource, /createSelectionEnd = ""/);
+  assert.match(handlerSource, /restorePreferredDetailsSelection\(\)/);
   assert.match(handlerSource, /scheduleAvailabilityCheck\(\{ resetSelectionOnUnavailable: true \}\)/);
   assert.match(handlerSource, /schedulePriceCheck\(\)/);
 
@@ -58,7 +59,8 @@ test("changing the edited reservation resource keeps free dates and clears confi
   assert.match(availabilitySource, /createSelectionStart = ""/);
   assert.match(availabilitySource, /createSelectionEnd = ""/);
   assert.match(availabilitySource, /if \(!result\.available && resetSelectionOnUnavailable\)/);
-  assert.match(availabilitySource, /resetCalendarSelection\("Datele selectate sunt deja ocupate în noua unitate\./);
+  assert.match(availabilitySource, /resetCalendarSelection\(\s*"Datele selectate sunt deja ocupate în noua unitate\./);
+  assert.match(availabilitySource, /\{ preserveDetailsSelection: true \}/);
   assert.match(availabilitySource, /excludeBookingId/);
 });
 

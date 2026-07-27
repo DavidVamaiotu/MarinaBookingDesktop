@@ -164,6 +164,7 @@ let createQuoteKey = "";
 let createCalendarMonth = monthStart(todayIso());
 let createSelectionStart = "";
 let createSelectionEnd = "";
+let detailsPreferredSelection = { start: "", end: "" };
 let detailsInitialQuoteKey = "";
 let showTrashed = false;
 let lastScrollLeft = 0;
@@ -1581,6 +1582,18 @@ function renderCreateCalendar() {
   renderCreateSummary();
 }
 
+function rememberDetailsSelection() {
+  if (!editingDetails()) return;
+  detailsPreferredSelection = { start: createSelectionStart, end: createSelectionEnd };
+}
+
+function restorePreferredDetailsSelection() {
+  if (!editingDetails() || createSelectionStart || createSelectionEnd || !detailsPreferredSelection.start) return false;
+  createSelectionStart = detailsPreferredSelection.start;
+  createSelectionEnd = detailsPreferredSelection.end;
+  return true;
+}
+
 function selectCreateDate(value) {
   const occupancy = createOccupancy();
   const day = occupancy[value] || { am: "available", pm: "available" };
@@ -1605,6 +1618,7 @@ function selectCreateDate(value) {
     setCreateAvailability("Interval disponibil. Se verifică și pe server…", "available");
     shouldCheck = true;
   }
+  rememberDetailsSelection();
   renderCreateCalendar();
   if (shouldCheck) {
     scheduleAvailabilityCheck();
@@ -1777,11 +1791,12 @@ function requireValidQuote(result) {
   return result;
 }
 
-function resetCalendarSelection(message, type = "") {
+function resetCalendarSelection(message, type = "", { preserveDetailsSelection = false } = {}) {
   clearTimeout(availabilityTimer);
   availabilityRequestId += 1;
   createSelectionStart = "";
   createSelectionEnd = "";
+  if (editingDetails() && !preserveDetailsSelection) detailsPreferredSelection = { start: "", end: "" };
   availabilityState = "idle";
   invalidateCreateQuote("Selectați datele pentru calcularea prețului.");
   setCreateAvailability(message, type);
@@ -1813,7 +1828,11 @@ function scheduleAvailabilityCheck({ resetSelectionOnUnavailable = false } = {})
       const result = await window.marina.checkAvailability({ resourceId, dates: BookingCalendar.toStayDateTimes(rangeDates(start, end)), excludeBookingId, source });
       if (source !== activeWorkspace || requestId !== availabilityRequestId || Number(form.elements.resourceId.value) !== resourceId || form.elements.start.value !== start || form.elements.end.value !== end) return;
       if (!result.available && resetSelectionOnUnavailable) {
-        resetCalendarSelection("Datele selectate sunt deja ocupate în noua unitate. Selectați alt interval.", "unavailable");
+        resetCalendarSelection(
+          "Datele selectate sunt deja ocupate în noua unitate. Selectați alt interval.",
+          "unavailable",
+          { preserveDetailsSelection: true }
+        );
         return;
       }
       availabilityState = result.available ? "available" : "unavailable";
@@ -2018,6 +2037,7 @@ function closeBookingOverlays() {
   if (paymentDialog.open) paymentDialog.close();
   selectedBookingId = null;
   selectedBookingView = "";
+  detailsPreferredSelection = { start: "", end: "" };
 }
 
 function dismissTopLayer() {
@@ -2088,6 +2108,7 @@ function populateDetails(booking, reset = true) {
     form.elements.note.value = booking.note || "";
     createSelectionStart = form.elements.start.value;
     createSelectionEnd = form.elements.end.value;
+    detailsPreferredSelection = { start: createSelectionStart, end: createSelectionEnd };
     createCalendarMonth = monthStart(utcDate(createSelectionStart || todayIso()));
     availabilityState = initialDates.valid ? "available" : "idle";
     quoteState = initialDates.valid && PricingNote.parse(form.elements.note.value) ? "saved" : "stale";
@@ -2495,8 +2516,12 @@ $("#createForm").elements.electricity.addEventListener("change", schedulePriceCh
 $("#detailsForm").elements.resourceId.addEventListener("change", () => {
   const form = $("#detailsForm");
   fillGuestCounts(form);
+  restorePreferredDetailsSelection();
   if (!createSelectionStart || !createSelectionEnd) {
-    resetCalendarSelection("Selectați data sosirii și data plecării.");
+    availabilityState = "idle";
+    invalidateCreateQuote("Selectați datele pentru calcularea prețului.");
+    setCreateAvailability(createSelectionStart ? "Selectați data plecării." : "Selectați data sosirii și data plecării.");
+    renderCreateCalendar();
     return;
   }
   availabilityState = "checking";
