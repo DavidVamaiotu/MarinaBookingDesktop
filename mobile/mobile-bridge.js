@@ -1153,7 +1153,9 @@ if (!window.marina) {
     },
     checkAvailability(input) {
       const source = SOURCES.has(input?.source) ? input.source : currentSource;
-      return request("/availability", { method: "POST", body: { resource_id: Number(input.resourceId), dates: input.dates }, readOnly: true }, null, source).then(({ payload }) => {
+      const body = { resource_id: Number(input.resourceId), dates: input.dates };
+      if (input.excludeBookingId !== undefined && input.excludeBookingId !== null) body.exclude_booking_id = Number(input.excludeBookingId);
+      return request("/availability", { method: "POST", body, readOnly: true }, null, source).then(({ payload }) => {
         if (typeof payload?.available !== "boolean") throw Object.assign(new Error("Endpoint-ul disponibilității a returnat un răspuns incomplet."), { code: "invalid_availability_response", permanent: true, payload });
         return payload;
       });

@@ -112,9 +112,9 @@ test("camping creation includes vehicle plate and caravan electricity fields", (
 
 test("camping calendar delegates parent capacity allocation and never offers an extra bed", () => {
   const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
-  assert.match(appSource, /function createOccupancy\(\) \{\s*if \(activeWorkspace === "camping"\) return \{\}/);
+  assert.match(appSource, /function createOccupancy\(form = calendarForm\(\)\) \{\s*if \(activeWorkspace === "camping"\) return \{\}/);
   assert.match(appSource, /Campingul are capacitate multiplă; alocarea finală este verificată de WordPress/);
-  assert.match(appSource, /window\.marina\.checkAvailability\(\{ resourceId, dates:/);
+  assert.match(appSource, /window\.marina\.checkAvailability\(\{ resourceId, dates:[^\n]+excludeBookingId, source \}/);
   assert.match(appSource, /else if \(form\.elements\.extraBed\.checked\) fields\["pat-suplimentar"\]/);
   assert.match(appSource, /\$\("#createExtraBed"\)\.hidden = camping/);
 });

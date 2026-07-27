@@ -105,25 +105,36 @@
           <h3>Sejur / Rezervare</h3>
         </header>
         <label>Unitate de cazare<select name="resourceId" required></select></label>
+        <section class="booking-calendar details-booking-calendar" aria-label="Calendar disponibilitate">
+          <div class="booking-calendar-months" id="detailsCalendar"></div>
+        </section>
+        <div class="booking-legend details-booking-legend" aria-label="Legendă calendar">
+          <span><i class="legend-day available">03</i>Disponibil</span>
+          <span><i class="legend-day booked">03</i>Rezervat</span>
+          <span><i class="legend-day pending">03</i>În așteptare</span>
+          <span><i class="legend-day partial">03</i>Rezervat parțial</span>
+        </div>
+        <div class="booking-summary details-booking-summary" aria-live="polite">
+          <p id="detailsDateSummary">Date: <span>…</span> – <span>…</span> nopți</p>
+          <p class="quote-state-row"><span class="quote-state" id="detailsQuoteState" data-state="stale">salvat</span></p>
+          <div class="booking-calendar-message" id="detailsPricing">Prețul salvat este afișat mai jos.</div>
+          <div class="booking-calendar-message" id="detailsAvailability">Selectați data sosirii și data plecării.</div>
+        </div>
+        <div class="details-calendar-pricing">
+          <div class="details-price-summary" id="detailsPriceSummary" aria-label="Sumar preț" aria-live="polite">
+            <div><span>Cost total</span><strong id="detailsPriceTotal">—</strong></div>
+            <div><span>Depozit</span><strong id="detailsPriceDeposit">—</strong></div>
+            <div class="details-price-balance"><span>Rest de plată</span><strong id="detailsPriceBalance">—</strong></div>
+          </div>
+          <label class="check"><input name="replaceNoteWithPrice" type="checkbox"><span>Actualizează prețul recalculat în nota internă la salvare</span></label>
+        </div>
         <div class="field-grid">
-          <label>Data sosirii <small>Check-in la 15:00</small><input name="start" type="date" required></label>
-          <label>Data plecării <small>Check-out la 12:00</small><input name="end" type="date" required></label>
-          <label>Număr adulți<input name="visitors" type="number" inputmode="numeric" min="1" required></label>
-          <label>Număr copii<input name="children" type="number" inputmode="numeric" min="0" required></label>
+          <label>Număr adulți<select name="adults" required></select></label>
+          <label>Număr copii<select name="children" required></select></label>
         </div>
+        <input name="start" type="hidden">
+        <input name="end" type="hidden">
         <div class="field-grid" id="reservationExtraFields"></div>
-      </section>
-
-      <section class="details-section details-price-section" aria-labelledby="detailsPriceTitle">
-        <header>
-          <svg class="details-section-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12.25 12.25 4H19v6.75L10.75 19 4 12.25z"></path><circle cx="15.7" cy="7.4" r="1.15"></circle></svg>
-          <h3 id="detailsPriceTitle">Sumar preț</h3>
-        </header>
-        <div class="details-price-summary" id="detailsPriceSummary" aria-live="polite">
-          <div><span>Cost total</span><strong id="detailsPriceTotal">—</strong></div>
-          <div><span>Depozit</span><strong id="detailsPriceDeposit">—</strong></div>
-          <div class="details-price-balance"><span>Rest de plată</span><strong id="detailsPriceBalance">—</strong></div>
-        </div>
       </section>
 
       <section class="details-section details-note-section">

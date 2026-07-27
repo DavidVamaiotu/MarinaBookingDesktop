@@ -184,8 +184,8 @@ class BookingService extends EventEmitter {
     return result;
   }
 
-  availability(resourceId, dates) {
-    return this.api.availability(resourceId, dates);
+  availability(resourceId, dates, options = {}) {
+    return this.api.availability(resourceId, dates, options);
   }
 
   async quote(input) {

@@ -169,6 +169,25 @@ test("mobile create saves its note and refreshes through the expected API contra
   assert.ok(harness.classNames.has("is-mobile-app"));
 });
 
+test("mobile edit availability previews exclude the reservation being edited", async () => {
+  const requests = [];
+  const harness = await configuredBridge(async (url, options = {}) => {
+    requests.push({ url, options });
+    if (url.endsWith("/resources")) return jsonResponse({ resources: [{ id: 4, title: "Camera 4", active: true }] });
+    if (url.includes("/bookings?")) return jsonResponse({ bookings: [] });
+    if (url.endsWith("/availability")) return jsonResponse({ available: true });
+    throw new Error(`Unexpected synthetic request: ${url}`);
+  });
+  await harness.marina.checkAvailability({
+    resourceId: 4,
+    dates: ["2026-07-20 15:00:01", "2026-07-21 12:00:02"],
+    excludeBookingId: 88,
+    source: "rooms"
+  });
+  const availability = requests.find((item) => item.url.endsWith("/availability"));
+  assert.equal(JSON.parse(availability.options.body).exclude_booking_id, 88);
+});
+
 test("mobile create clears Booking Calendar's automatic zero-price remark when no note was entered", async () => {
   const requests = [];
   let created = false;

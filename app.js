@@ -69,10 +69,7 @@ async function switchWorkspace(source) {
   if (!new Set(["rooms", "camping"]).has(source) || source === activeWorkspace) return;
   cancelDrag();
   const switchId = ++workspaceSwitchId;
-  clearTimeout(availabilityTimer);
-  clearTimeout(quoteTimer);
-  availabilityRequestId += 1;
-  quoteRequestId += 1;
+  invalidateCalendarRequests();
   if (createDialog.open) createDialog.close();
   if (duplicateDialog.open) duplicateDialog.close();
   if (paymentDialog.open) paymentDialog.close();
@@ -160,6 +157,7 @@ let createQuoteKey = "";
 let createCalendarMonth = monthStart(todayIso());
 let createSelectionStart = "";
 let createSelectionEnd = "";
+let detailsInitialQuoteKey = "";
 let showTrashed = false;
 let lastScrollLeft = 0;
 let lastRecenterAt = 0;
@@ -207,6 +205,19 @@ function rangeDates(start, end) {
   const values = [];
   for (let cursor = utcDate(start); cursor <= utcDate(end) && values.length < 367; cursor = addDays(cursor, 1)) values.push(iso(cursor));
   return values;
+}
+function validIsoDate(value) {
+  const candidate = String(value || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(candidate)) return false;
+  const date = utcDate(candidate);
+  return Number.isFinite(date.getTime()) && iso(date) === candidate;
+}
+function normalizedBookingDateRange(booking) {
+  const dates = Array.isArray(booking?.dates) ? booking.dates.map(String).filter(validIsoDate).sort() : [];
+  const start = dates[0] || "";
+  const last = dates.at(-1) || "";
+  const end = last > start ? last : "";
+  return { start, end, valid: Boolean(start && end) };
 }
 function formatDate(value) { return dateOnlyFormatter("ro-RO", { day: "2-digit", month: "short" }).format(utcDate(value)); }
 function formatMonth(value) {
@@ -1187,11 +1198,7 @@ function applyState(next) {
     else if (booking && selectedBookingView === "edit") populateDetails(booking, false);
     else if (booking && selectedBookingView === "payment") populatePaymentDialog(booking, false);
     else if (!booking) {
-      bookingMenu.hidden = true;
-      detailsPanel.hidden = true;
-      if (paymentDialog.open) paymentDialog.close();
-      selectedBookingId = null;
-      selectedBookingView = "";
+      closeBookingOverlays();
     }
   }
 }
@@ -1280,34 +1287,58 @@ function calendarDateLabel(value) {
   return dateOnlyFormatter("ro-RO", { day: "numeric", month: "short", year: "numeric" }).format(utcDate(value));
 }
 
-function selectedResource() {
-  const id = Number($("#createForm").elements.resourceId.value);
+function editingDetails() {
+  return selectedBookingView === "edit";
+}
+
+function calendarForm() {
+  return editingDetails() ? $("#detailsForm") : $("#createForm");
+}
+
+function calendarElement(createSelector, detailsSelector) {
+  return $(editingDetails() ? detailsSelector : createSelector);
+}
+
+function selectedResource(form = calendarForm()) {
+  const id = Number(form.elements.resourceId.value);
   return state.resources.find((resource) => Number(resource.id) === id) || null;
 }
 
-function createOccupancy() {
+function createOccupancy(form = calendarForm()) {
   if (activeWorkspace === "camping") return {};
-  return BookingCalendar.occupancyFor(state.bookings, Number($("#createForm").elements.resourceId.value));
+  const bookings = editingDetails()
+    ? state.bookings.filter((booking) => booking.localId !== selectedBookingId)
+    : state.bookings;
+  return BookingCalendar.occupancyFor(bookings, Number(form.elements.resourceId.value));
 }
 
 function setCreateAvailability(message, type = "") {
-  const output = $("#createAvailability");
+  const output = calendarElement("#createAvailability", "#detailsAvailability");
   output.className = `booking-calendar-message ${type}`.trim();
   output.textContent = message;
 }
 
 function setCreatePricing(message, type = "") {
-  const output = $("#createPricing");
+  const output = calendarElement("#createPricing", "#detailsPricing");
   output.className = `booking-calendar-message ${type}`.trim();
   output.textContent = message;
   const summary = output.closest(".booking-summary");
-  const stateLabel = $("#createQuoteState");
+  const stateLabel = calendarElement("#createQuoteState", "#detailsQuoteState");
   summary.dataset.quoteState = quoteState;
   stateLabel.dataset.state = quoteState;
   stateLabel.textContent = { stale: "neactualizat", calculating: "se calculează", fresh: "actual", error: "eroare" }[quoteState] || quoteState;
+  if (editingDetails()) $("#detailsPriceSummary").classList.toggle("is-stale", quoteState !== "fresh");
 }
 
 function pricingFormData(form) {
+  if (form.id === "detailsForm") {
+    const booking = bookingById(selectedBookingId);
+    if (!booking) return {};
+    const fields = BookingFields.prepareFormData(detailsFormData(booking, form), booking.resourceId);
+    fields.starttime = { value: activeWorkspace === "camping" ? "14:00" : "15:00", type: "text" };
+    fields.endtime = { value: "12:00", type: "text" };
+    return fields;
+  }
   const camping = activeWorkspace === "camping";
   const fields = {
     visitors: { value: form.elements.adults.value, type: "selectbox-one" },
@@ -1319,6 +1350,20 @@ function pricingFormData(form) {
     fields.car_plates = { value: form.elements.vehiclePlate.value, type: "text" };
     if (isCaravanResource(form.elements.resourceId.value) && form.elements.electricity.checked) fields.Energie_electrica = { value: "true", type: "checkbox" };
   } else if (form.elements.extraBed.checked) fields["pat-suplimentar"] = { value: "true", type: "checkbox" };
+  return fields;
+}
+
+function pricingKeyFormData(form) {
+  if (form.id !== "detailsForm") return pricingFormData(form);
+  const fields = {
+    visitors: form.elements.adults.value,
+    children: form.elements.children.value
+  };
+  for (const input of form.querySelectorAll("[data-extra-field]")) {
+    const name = input.dataset.extraField;
+    if (name !== "pat-suplimentar" && !isElectricityField(name) && !isVehiclePlateField(name)) continue;
+    fields[name] = input.type === "checkbox" ? input.checked : input.value;
+  }
   return fields;
 }
 
@@ -1342,25 +1387,21 @@ function quoteInput(form = $("#createForm"), { mode = "fast", forceFresh = false
     resourceId: Number(form.elements.resourceId.value),
     dates: rangeDates(form.elements.start.value, form.elements.end.value),
     formData: pricingFormData(form),
-    bookingFormType: selectedResource()?.defaultForm || "",
+    bookingFormType: selectedResource(form)?.defaultForm || "",
     mode,
     forceFresh
   };
 }
 
-function currentQuoteKey(form = $("#createForm")) {
+function currentQuoteKey(form = calendarForm()) {
   if (!form.elements.resourceId.value || !form.elements.start.value || !form.elements.end.value) return "";
   return JSON.stringify([
     Number(form.elements.resourceId.value),
     form.elements.start.value,
     form.elements.end.value,
-    form.elements.adults.value,
-    form.elements.children.value,
-    form.elements.extraBed.checked,
-    form.elements.vehiclePlate.value,
-    form.elements.electricity.checked,
+    pricingKeyFormData(form),
     activeWorkspace,
-    selectedResource()?.defaultForm || ""
+    selectedResource(form)?.defaultForm || ""
   ]);
 }
 
@@ -1374,9 +1415,48 @@ function createPricingNote(quote) {
   return PricingNote.format(quote);
 }
 
+async function recalculatedBookingNote(booking, quote, source, currentNote = booking.note) {
+  const snapshot = await window.marina.getPayment(booking.localId, { source });
+  const total = Number(quote?.total);
+  const rawDeposit = snapshot?.deposit;
+  const deposit = Number(rawDeposit);
+  if (!Number.isFinite(total) || total < 0 || rawDeposit === null || rawDeposit === undefined || rawDeposit === "" || !Number.isFinite(deposit) || deposit < 0) {
+    throw new Error("Avansul actual nu a putut fi verificat. Nota nu a fost modificată.");
+  }
+  if (deposit > total) {
+    throw new Error("Avansul actual depășește noul cost total. Ajustează avansul înainte de înlocuirea notei.");
+  }
+  paymentSnapshots.set(booking.localId, snapshot);
+  const balance = Math.round((total - deposit) * 100) / 100;
+  const pricingLine = PricingNote.format({ total, deposit, balance });
+  const note = String(currentNote || "");
+  return PricingNote.parse(note)
+    ? PricingNote.update(note, deposit, total).note
+    : `${note}${note && !note.endsWith("\n") ? "\n" : ""}${pricingLine}`;
+}
+
+function invalidateCalendarRequests() {
+  clearTimeout(availabilityTimer);
+  clearTimeout(quoteTimer);
+  availabilityRequestId += 1;
+  quoteRequestId += 1;
+  void window.marina.clearQuoteCache();
+}
+
 function updateCreateSubmitState() {
-  const currentKey = currentQuoteKey();
-  const currentQuoteAvailable = Boolean(createQuote?.valid && createQuoteKey === currentKey);
+  const form = calendarForm();
+  const currentKey = currentQuoteKey(form);
+  const savedDetailsQuoteAvailable = editingDetails()
+    && currentKey === detailsInitialQuoteKey
+    && Boolean(PricingNote.parse(form.elements.note.value));
+  const currentQuoteAvailable = Boolean(createQuote?.valid && createQuoteKey === currentKey) || savedDetailsQuoteAvailable;
+  if (editingDetails()) {
+    form.querySelector('[type="submit"]').disabled = !createSelectionEnd
+      || availabilityState !== "available"
+      || !currentQuoteAvailable
+      || quoteState === "calculating";
+    return;
+  }
   $("#createSubmit").disabled = createSubmitting
     || !createSelectionEnd
     || availabilityState !== "available"
@@ -1389,36 +1469,43 @@ function invalidateCreateQuote(message = "Se așteaptă calcularea prețului.") 
   clearTimeout(quoteTimer);
   quoteRequestId += 1;
   quoteState = "stale";
-  $("#createQuoteBreakdown").hidden = true;
+  if (!editingDetails()) $("#createQuoteBreakdown").hidden = true;
   void window.marina.clearQuoteCache();
   setCreatePricing(message);
   renderCreateSummary();
 }
 
-function fillGuestCounts() {
-  const form = $("#createForm");
-  const capacity = activeWorkspace === "camping" ? (isCaravanResource(form.elements.resourceId.value) ? 5 : 10) : Math.max(1, Number(selectedResource()?.capacity) || 4);
-  const currentAdults = Number(form.elements.adults.value) || 1;
-  const currentChildren = Number(form.elements.children.value) || 0;
-  form.elements.adults.innerHTML = Array.from({ length: Math.max(4, capacity) }, (_, index) => `<option value="${index + 1}">${index + 1}</option>`).join("");
-  form.elements.children.innerHTML = Array.from({ length: 5 }, (_, index) => `<option value="${index}">${index}</option>`).join("");
-  form.elements.adults.value = String(Math.min(currentAdults, Math.max(4, capacity)));
-  form.elements.children.value = String(Math.min(currentChildren, 4));
+function fillGuestCounts(form = calendarForm(), values = {}) {
+  const capacity = activeWorkspace === "camping" ? (isCaravanResource(form.elements.resourceId.value) ? 5 : 10) : Math.max(1, Number(selectedResource(form)?.capacity) || 4);
+  const currentAdults = Number(values.adults ?? form.elements.adults.value) || 1;
+  const currentChildren = Number(values.children ?? form.elements.children.value) || 0;
+  const adultLimit = Math.max(4, capacity, currentAdults);
+  const childLimit = Math.max(4, currentChildren);
+  form.elements.adults.innerHTML = Array.from({ length: adultLimit }, (_, index) => `<option value="${index + 1}">${index + 1}</option>`).join("");
+  form.elements.children.innerHTML = Array.from({ length: childLimit + 1 }, (_, index) => `<option value="${index}">${index}</option>`).join("");
+  form.elements.adults.value = String(currentAdults);
+  form.elements.children.value = String(currentChildren);
 }
 
 function renderCreateSummary() {
-  const form = $("#createForm");
+  const form = calendarForm();
+  const dateSummary = calendarElement("#createDateSummary", "#detailsDateSummary");
   const nights = createSelectionEnd ? BookingCalendar.daysBetween(createSelectionStart, createSelectionEnd) : 0;
   if (createSelectionStart && createSelectionEnd) {
-    $("#createDateSummary").innerHTML = `Date: <strong>${escapeHtml(calendarDateLabel(createSelectionStart))}</strong> – <strong>${escapeHtml(calendarDateLabel(createSelectionEnd))}</strong> · ${nights} nopți`;
+    dateSummary.innerHTML = `Date: <strong>${escapeHtml(calendarDateLabel(createSelectionStart))}</strong> – <strong>${escapeHtml(calendarDateLabel(createSelectionEnd))}</strong> · ${nights} nopți`;
   } else if (createSelectionStart) {
-    $("#createDateSummary").innerHTML = `Date: <strong>${escapeHtml(calendarDateLabel(createSelectionStart))}</strong> – <span>selectați plecarea</span>`;
+    dateSummary.innerHTML = `Date: <strong>${escapeHtml(calendarDateLabel(createSelectionStart))}</strong> – <span>selectați plecarea</span>`;
   } else {
-    $("#createDateSummary").innerHTML = "Date: <span>…</span> – <span>…</span> nopți";
+    dateSummary.innerHTML = "Date: <span>…</span> – <span>…</span> nopți";
   }
-  $("#createTotalCost").textContent = createQuote ? formatCreateMoney(createQuote.total, createQuote.formatted?.total) : "—";
-  $("#createDepositCost").textContent = createQuote ? formatCreateMoney(createQuote.deposit, createQuote.formatted?.deposit) : "—";
-  $("#createBalanceCost").textContent = createQuote ? formatCreateMoney(createQuote.balance, createQuote.formatted?.balance) : "—";
+  if (editingDetails()) {
+    if (createQuote?.valid) renderDetailsPrice(createPricingNote(createQuote));
+    else renderDetailsPrice(form.elements.note.value);
+  } else {
+    $("#createTotalCost").textContent = createQuote ? formatCreateMoney(createQuote.total, createQuote.formatted?.total) : "—";
+    $("#createDepositCost").textContent = createQuote ? formatCreateMoney(createQuote.deposit, createQuote.formatted?.deposit) : "—";
+    $("#createBalanceCost").textContent = createQuote ? formatCreateMoney(createQuote.balance, createQuote.formatted?.balance) : "—";
+  }
   form.elements.start.value = createSelectionStart;
   form.elements.end.value = createSelectionEnd;
   updateCreateSubmitState();
@@ -1432,7 +1519,9 @@ function createMonthHtml(month, position, occupancy) {
   const today = todayIso();
   const rangeStart = state.range?.start || "0000-01-01";
   const rangeEnd = state.range?.end || "9999-12-31";
-  const minMonth = monthStart(utcDate(today > rangeStart ? today : rangeStart));
+  const editedBookingStart = editingDetails() ? bookingById(selectedBookingId)?.dates?.[0] : "";
+  const earliestSelectable = editedBookingStart && editedBookingStart < today ? editedBookingStart : today;
+  const minMonth = monthStart(utcDate(earliestSelectable > rangeStart ? earliestSelectable : rangeStart));
   const maxMonth = monthStart(addMonths(utcDate(rangeEnd), -1));
   const canGoBack = createCalendarMonth > minMonth;
   const canGoForward = createCalendarMonth < maxMonth;
@@ -1444,7 +1533,7 @@ function createMonthHtml(month, position, occupancy) {
     if (dayNumber < 1 || dayNumber > days) return '<span class="calendar-blank"></span>';
     const value = `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(dayNumber).padStart(2, "0")}`;
     const outside = value < rangeStart || value > rangeEnd;
-    const past = value < today;
+    const past = value < today && !(editedBookingStart && value >= editedBookingStart);
     const occupied = occupancy[value] || { am: "available", pm: "available" };
     const stateForDay = past ? { am: "available", pm: "available" } : { ...occupied };
     if (value === today) stateForDay.am = "available";
@@ -1460,7 +1549,7 @@ function createMonthHtml(month, position, occupancy) {
 
 function renderCreateCalendar() {
   const occupancy = createOccupancy();
-  $("#createCalendar").innerHTML = `${createMonthHtml(createCalendarMonth, 0, occupancy)}${createMonthHtml(addMonths(createCalendarMonth, 1), 1, occupancy)}`;
+  calendarElement("#createCalendar", "#detailsCalendar").innerHTML = `${createMonthHtml(createCalendarMonth, 0, occupancy)}${createMonthHtml(addMonths(createCalendarMonth, 1), 1, occupancy)}`;
   renderCreateSummary();
 }
 
@@ -1497,12 +1586,8 @@ function selectCreateDate(value) {
 
 function openCreate({ resourceId, date } = {}) {
   cancelDrag();
+  closeBookingOverlays();
   const form = $("#createForm");
-  clearTimeout(availabilityTimer);
-  clearTimeout(quoteTimer);
-  availabilityRequestId += 1;
-  quoteRequestId += 1;
-  void window.marina.clearQuoteCache();
   form.reset();
   form.elements.approved.checked = false;
   form.elements.sendEmail.checked = false;
@@ -1591,7 +1676,7 @@ function renderQuoteBreakdown() {
 }
 
 async function fetchCreateQuote(requestId, key, { mode = "fast", forceFresh = false, source = activeWorkspace } = {}) {
-  const form = $("#createForm");
+  const form = calendarForm();
   quoteState = "calculating";
   setCreatePricing(mode === "full" ? "Se calculează detaliile prețului…" : "Se calculează…");
   renderCreateSummary();
@@ -1608,7 +1693,7 @@ async function fetchCreateQuote(requestId, key, { mode = "fast", forceFresh = fa
     createQuote = { ...result, valid: true };
     createQuoteKey = key;
     setCreatePricing(mode === "full" ? "Preț complet confirmat de Booking Calendar." : "Preț calculat de Booking Calendar.", "available");
-    renderQuoteBreakdown();
+    if (!editingDetails()) renderQuoteBreakdown();
     renderCreateSummary();
     return true;
   } catch (error) {
@@ -1623,9 +1708,10 @@ async function fetchCreateQuote(requestId, key, { mode = "fast", forceFresh = fa
   }
 }
 
-function schedulePriceCheck() {
+function schedulePriceCheck({ preserveNoteChoice = false } = {}) {
   clearTimeout(quoteTimer);
-  const form = $("#createForm");
+  const form = calendarForm();
+  if (editingDetails() && !preserveNoteChoice) form.elements.replaceNoteWithPrice.checked = true;
   const key = currentQuoteKey(form);
   const requestId = ++quoteRequestId;
   void window.marina.clearQuoteCache();
@@ -1636,7 +1722,7 @@ function schedulePriceCheck() {
     return;
   }
   quoteState = "stale";
-  $("#createQuoteBreakdown").hidden = true;
+  if (!editingDetails()) $("#createQuoteBreakdown").hidden = true;
   setCreatePricing("Prețul afișat trebuie actualizat…");
   renderCreateSummary();
   const source = activeWorkspace;
@@ -1645,7 +1731,7 @@ function schedulePriceCheck() {
 
 async function refreshPriceNow({ forceFresh = true } = {}) {
   clearTimeout(quoteTimer);
-  const key = currentQuoteKey();
+  const key = currentQuoteKey(calendarForm());
   if (!key) return false;
   const requestId = ++quoteRequestId;
   return fetchCreateQuote(requestId, key, { mode: "full", forceFresh, source: activeWorkspace });
@@ -1666,17 +1752,19 @@ function scheduleAvailabilityCheck() {
     return;
   }
   availabilityTimer = setTimeout(async () => {
-    const form = $("#createForm");
+    const form = calendarForm();
     if (!form.elements.resourceId.value || !form.elements.start.value || !form.elements.end.value || form.elements.start.value > form.elements.end.value) return;
     const resourceId = Number(form.elements.resourceId.value);
     const start = form.elements.start.value;
     const end = form.elements.end.value;
     const source = activeWorkspace;
+    const booking = editingDetails() ? bookingById(selectedBookingId) : null;
+    const excludeBookingId = booking?.serverId || null;
     availabilityState = "checking";
     setCreateAvailability("Se verifică disponibilitatea…");
     updateCreateSubmitState();
     try {
-      const result = await window.marina.checkAvailability({ resourceId, dates: BookingCalendar.toStayDateTimes(rangeDates(start, end)), source });
+      const result = await window.marina.checkAvailability({ resourceId, dates: BookingCalendar.toStayDateTimes(rangeDates(start, end)), excludeBookingId, source });
       if (source !== activeWorkspace || requestId !== availabilityRequestId || Number(form.elements.resourceId.value) !== resourceId || form.elements.start.value !== start || form.elements.end.value !== end) return;
       availabilityState = result.available ? "available" : "unavailable";
       setCreateAvailability(result.available ? "Datele sunt disponibile." : "Datele nu mai sunt disponibile.", result.available ? "available" : "unavailable");
@@ -1741,6 +1829,25 @@ function detailsFieldHtml(name, field) {
   if (BookingFields.isDetailsField(name, field)) return `<label class="span-2">${escapeHtml(label)}<textarea ${attributes} rows="3">${value}</textarea></label>`;
   const numeric = ["visitors", "adults", "children"].includes(name) ? ' inputmode="numeric"' : "";
   return `<label>${escapeHtml(label)}<input ${attributes}${numeric} value="${value}"></label>`;
+}
+
+function detailsFormData(booking, form) {
+  const adults = form.elements.adults.value;
+  const children = form.elements.children.value;
+  const formData = { ...booking.formData };
+  BookingFields.assign(formData, "name", ["firstName"], form.elements.name.value, "text");
+  BookingFields.assign(formData, "secondname", ["lastName"], form.elements.secondname.value, "text");
+  BookingFields.assign(formData, "email", ["email"], form.elements.email.value, "email");
+  BookingFields.assign(formData, "phone", ["phone"], form.elements.phone.value, "text");
+  BookingFields.assign(formData, "visitors", ["adults"], adults, "selectbox-one");
+  BookingFields.assign(formData, "children", ["children"], children, "selectbox-one");
+  if (booking.formData?.visitors_val) formData.visitors_val = { ...booking.formData.visitors_val, value: adults };
+  if (booking.formData?.children_val) formData.children_val = { ...booking.formData.children_val, value: children };
+  for (const input of form.querySelectorAll("[data-extra-field]")) {
+    const value = input.type === "checkbox" ? (input.checked ? "true" : "no") : input.value;
+    formData[input.dataset.extraField] = { value, type: input.dataset.fieldType || (input.type === "checkbox" ? "checkbox" : "text") };
+  }
+  return formData;
 }
 
 function formatMenuDate(value) {
@@ -1828,8 +1935,8 @@ function positionBookingMenu(anchorRect) {
 
 function openBookingMenu(booking, anchor) {
   if (!booking) return;
+  invalidateCalendarRequests();
   const anchorRect = anchor.getBoundingClientRect();
-  if (selectedBookingId !== booking.localId) void window.marina.clearQuoteCache();
   detailsPanel.hidden = true;
   populateBookingMenu(booking);
   prepareBookingMenuPosition();
@@ -1849,6 +1956,7 @@ function dismissBookingMenu() {
 }
 
 function closeBookingOverlays() {
+  invalidateCalendarRequests();
   $("#bookingPaymentMenu").hidden = true;
   $("#bookingPaymentMenuToggle").setAttribute("aria-expanded", "false");
   bookingMenu.hidden = true;
@@ -1865,9 +1973,7 @@ function dismissTopLayer() {
   if (paymentDialog.open) { paymentDialog.close(); selectedBookingId = null; selectedBookingView = ""; return true; }
   if (!bookingMenu.hidden) { dismissBookingMenu(); return true; }
   if (!detailsPanel.hidden) {
-    detailsPanel.hidden = true;
-    selectedBookingId = null;
-    selectedBookingView = "";
+    closeBookingOverlays();
     return true;
   }
   if (!diagnostics.hidden) { diagnostics.hidden = true; return true; }
@@ -1881,6 +1987,7 @@ window.addEventListener("marina:back", (event) => {
 
 function populateDetails(booking, reset = true) {
   cancelDrag();
+  if (reset) invalidateCalendarRequests();
   selectedBookingId = booking.localId;
   selectedBookingView = "edit";
   bookingMenu.hidden = true;
@@ -1897,8 +2004,12 @@ function populateDetails(booking, reset = true) {
     form.elements.email.value = BookingFields.value(booking, "email");
     form.elements.phone.value = BookingFields.value(booking, "phone");
     form.elements.sendEmail.checked = false;
-    form.elements.visitors.value = BookingFields.value(booking, "adults") || booking.formData?.visitors_val?.value || "1";
-    form.elements.children.value = BookingFields.value(booking, "children") || booking.formData?.children_val?.value || "0";
+    form.elements.replaceNoteWithPrice.checked = false;
+    form.elements.resourceId.value = booking.resourceId;
+    fillGuestCounts(form, {
+      adults: BookingFields.value(booking, "adults") || booking.formData?.visitors_val?.value || "1",
+      children: BookingFields.value(booking, "children") || booking.formData?.children_val?.value || "0"
+    });
     const extraFields = Object.entries(booking.formData || {}).filter(([name, field]) => editableDetailsField(name, field));
     const vehicleFields = extraFields.filter(([name]) => isVehiclePlateField(name));
     const vehicleField = vehicleFields.find(([, field]) => String(field?.value || "").trim()) || vehicleFields[0];
@@ -1917,12 +2028,27 @@ function populateDetails(booking, reset = true) {
     $("#clientExtraFields").innerHTML = clientFields.map(([name, field]) => detailsFieldHtml(name, field)).join("");
     $("#reservationExtraFields").hidden = reservationFields.length === 0;
     $("#reservationExtraFields").innerHTML = reservationFields.map(([name, field]) => detailsFieldHtml(name, field)).join("");
-    form.elements.resourceId.value = booking.resourceId;
-    form.elements.start.value = booking.dates[0];
-    form.elements.end.value = booking.dates[booking.dates.length - 1];
+    const initialDates = normalizedBookingDateRange(booking);
+    form.elements.start.value = initialDates.start;
+    form.elements.end.value = initialDates.end;
     form.elements.note.value = booking.note || "";
+    createSelectionStart = form.elements.start.value;
+    createSelectionEnd = form.elements.end.value;
+    createCalendarMonth = monthStart(utcDate(createSelectionStart || todayIso()));
+    availabilityState = initialDates.valid ? "available" : "idle";
+    quoteState = initialDates.valid && PricingNote.parse(form.elements.note.value) ? "fresh" : "stale";
+    createQuote = null;
+    createQuoteKey = "";
+    detailsInitialQuoteKey = currentQuoteKey(form);
+    setCreateAvailability(
+      initialDates.valid ? "Datele actuale ale rezervării sunt selectate." : "Selectați data sosirii și data plecării.",
+      initialDates.valid ? "available" : ""
+    );
+    setCreatePricing("Prețul salvat este afișat. Modificați rezervarea pentru recalculare.");
+    renderCreateCalendar();
+    if (initialDates.valid && quoteState === "stale") schedulePriceCheck();
   }
-  renderDetailsPrice(form.elements.note.value);
+  renderDetailsPrice(createQuote?.valid ? createPricingNote(createQuote) : form.elements.note.value);
   const clientName = [BookingFields.value(booking, "firstName"), BookingFields.value(booking, "lastName")].filter(Boolean).join(" ").trim();
   $("#detailsTitle").textContent = clientName || `Rezervarea ${booking.serverId || "locală"}`;
   renderCommands();
@@ -2286,15 +2412,11 @@ availabilityGrid.addEventListener("touchend", endAvailabilitySwipe, { passive: t
 availabilityGrid.addEventListener("touchcancel", cancelAvailabilitySwipe, { passive: true });
 $("#openCreate").addEventListener("click", () => openCreate());
 createDialog.addEventListener("close", () => {
-  clearTimeout(availabilityTimer);
-  clearTimeout(quoteTimer);
-  availabilityRequestId += 1;
-  quoteRequestId += 1;
-  void window.marina.clearQuoteCache();
+  invalidateCalendarRequests();
 });
 $("#closeCreateDialog").addEventListener("click", () => createDialog.close());
 $("#cancelCreateDialog").addEventListener("click", () => createDialog.close());
-$("#createCalendar").addEventListener("click", (event) => {
+function handleBookingCalendarClick(event) {
   const navigation = event.target.closest("[data-calendar-nav]");
   if (navigation) {
     createCalendarMonth = addMonths(createCalendarMonth, Number(navigation.dataset.calendarNav));
@@ -2303,7 +2425,9 @@ $("#createCalendar").addEventListener("click", (event) => {
   }
   const day = event.target.closest("[data-calendar-date]");
   if (day) selectCreateDate(day.dataset.calendarDate);
-});
+}
+$("#createCalendar").addEventListener("click", handleBookingCalendarClick);
+$("#detailsCalendar").addEventListener("click", handleBookingCalendarClick);
 $("#createForm").elements.resourceId.addEventListener("change", () => {
   createSelectionStart = "";
   createSelectionEnd = "";
@@ -2319,6 +2443,15 @@ $("#createForm").elements.children.addEventListener("change", schedulePriceCheck
 $("#createForm").elements.extraBed.addEventListener("change", schedulePriceCheck);
 $("#createForm").elements.vehiclePlate.addEventListener("input", schedulePriceCheck);
 $("#createForm").elements.electricity.addEventListener("change", schedulePriceCheck);
+$("#detailsForm").elements.resourceId.addEventListener("change", () => {
+  createSelectionStart = "";
+  createSelectionEnd = "";
+  fillGuestCounts($("#detailsForm"));
+  availabilityState = "idle";
+  setCreateAvailability("Selectați data sosirii și data plecării.");
+  invalidateCreateQuote("Selectați datele pentru calcularea prețului.");
+  renderCreateCalendar();
+});
 $("#createQuoteDetails").addEventListener("click", async () => {
   const breakdown = $("#createQuoteBreakdown");
   if (!breakdown.hidden) {
@@ -2355,6 +2488,31 @@ $("#createForm").addEventListener("submit", async (event) => {
   });
 });
 
+async function saveBookingDetails(booking, form) {
+  const source = activeWorkspace;
+  const saveButton = form.querySelector('[type="submit"]');
+  return runExclusive(`booking:${source}:${booking.localId}`, [saveButton], async () => {
+    const resourceId = Number(form.elements.resourceId.value);
+    if (!form.elements.start.value || !form.elements.end.value || form.elements.start.value >= form.elements.end.value) {
+      throw Object.assign(new Error("Plecare trebuie să fie după sosire."), { code: "invalid_date_range", permanent: true });
+    }
+    const dates = rangeDates(form.elements.start.value, form.elements.end.value);
+    const bookingFormType = resourceById(resourceId)?.defaultForm || "";
+    const pricingChanged = currentQuoteKey(form) !== detailsInitialQuoteKey;
+    const replaceNoteWithPrice = form.elements.replaceNoteWithPrice.checked;
+    if (availabilityState !== "available") throw Object.assign(new Error("Disponibilitatea trebuie confirmată înainte de salvare."), { code: "availability_unconfirmed", permanent: true });
+    if ((pricingChanged || replaceNoteWithPrice) && !await refreshPriceNow({ forceFresh: true })) return;
+    const note = replaceNoteWithPrice
+      ? await recalculatedBookingNote(booking, createQuote, source, form.elements.note.value)
+      : form.elements.note.value;
+    if (source !== activeWorkspace || selectedBookingId !== booking.localId) throw workspaceChangedError();
+    const formData = detailsFormData(booking, form);
+    const outboundFormData = BookingFields.prepareFormData(formData, booking.resourceId);
+    closeBookingOverlays();
+    await runApiAction("editBooking", booking.localId, { resourceId, sourceResourceId: booking.resourceId, dates, formData: outboundFormData, bookingFormType, note, sendEmail: Boolean(form.elements.sendEmail.checked), source });
+  });
+}
+
 $("#detailsForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const booking = bookingById(selectedBookingId);
@@ -2366,40 +2524,21 @@ $("#detailsForm").addEventListener("submit", async (event) => {
     showError(new Error(invalid?.validationMessage || "Completează câmpurile obligatorii înainte de salvare."));
     return;
   }
-  const visitors = form.elements.visitors.value;
-  const children = form.elements.children.value;
-  const formData = { ...booking.formData };
-  BookingFields.assign(formData, "name", ["firstName"], form.elements.name.value, "text");
-  BookingFields.assign(formData, "secondname", ["lastName"], form.elements.secondname.value, "text");
-  BookingFields.assign(formData, "email", ["email"], form.elements.email.value, "email");
-  BookingFields.assign(formData, "phone", ["phone"], form.elements.phone.value, "text");
-  BookingFields.assign(formData, "visitors", ["adults"], visitors, "selectbox-one");
-  BookingFields.assign(formData, "children", ["children"], children, "selectbox-one");
-  if (booking.formData?.visitors_val) formData.visitors_val = { ...booking.formData.visitors_val, value: visitors };
-  if (booking.formData?.children_val) formData.children_val = { ...booking.formData.children_val, value: children };
-  for (const input of form.querySelectorAll("[data-extra-field]")) {
-    const value = input.type === "checkbox" ? (input.checked ? "true" : "no") : input.value;
-    formData[input.dataset.extraField] = { value, type: input.dataset.fieldType || (input.type === "checkbox" ? "checkbox" : "text") };
-  }
-  const source = activeWorkspace;
-  const saveButton = form.querySelector('[type="submit"]');
-  await runExclusive(`booking:${source}:${booking.localId}`, [saveButton], async () => { try {
-    const resourceId = Number(form.elements.resourceId.value);
-    if (!form.elements.start.value || !form.elements.end.value || form.elements.start.value >= form.elements.end.value) {
-      throw Object.assign(new Error("Plecare trebuie să fie după sosire."), { code: "invalid_date_range", permanent: true });
-    }
-    const dates = rangeDates(form.elements.start.value, form.elements.end.value);
-    const bookingFormType = resourceById(resourceId)?.defaultForm || "";
-    const outboundFormData = BookingFields.prepareFormData(formData, booking.resourceId);
-    requireValidQuote(await window.marina.quoteBooking({ resourceId, sourceResourceId: booking.resourceId, dates, formData: outboundFormData, bookingFormType, mode: "full", forceFresh: true, source }));
-    if (source !== activeWorkspace || selectedBookingId !== booking.localId) throw workspaceChangedError();
-    closeBookingOverlays();
-    await runApiAction("editBooking", booking.localId, { resourceId, sourceResourceId: booking.resourceId, dates, formData: outboundFormData, bookingFormType, note: form.elements.note.value, sendEmail: Boolean(form.elements.sendEmail.checked), source });
-  } catch (error) { showError(error); } });
+  try { await saveBookingDetails(booking, form); }
+  catch (error) { showError(error); }
 });
 $("#detailsForm").addEventListener("input", (event) => {
-  if (event.target.matches('[name="note"]')) renderDetailsPrice(event.target.value);
-  if (event.target.matches('[name="resourceId"],[name="start"],[name="end"],[name="visitors"],[name="children"],[data-extra-field]')) void window.marina.clearQuoteCache();
+  if (event.target.matches('[name="note"]') && !createQuote?.valid) renderDetailsPrice(event.target.value);
+  if (event.target.matches("[data-extra-field]")) {
+    const field = { type: event.target.dataset.fieldType };
+    schedulePriceCheck({ preserveNoteChoice: BookingFields.isDetailsField(event.target.dataset.extraField, field) });
+  }
+});
+$("#detailsForm").elements.adults.addEventListener("change", schedulePriceCheck);
+$("#detailsForm").elements.children.addEventListener("change", schedulePriceCheck);
+$("#detailsForm").elements.replaceNoteWithPrice.addEventListener("change", (event) => {
+  if (!event.target.checked || (createQuote?.valid && createQuoteKey === currentQuoteKey($("#detailsForm")))) return;
+  schedulePriceCheck({ preserveNoteChoice: true });
 });
 
 $("#detailsStatus").addEventListener("click", async () => {
@@ -2595,8 +2734,9 @@ document.addEventListener("click", async (event) => {
   }
   const close = event.target.closest("[data-close]");
   if (close) {
-    document.getElementById(close.dataset.close).hidden = true;
-    if (["bookingMenu", "detailsPanel"].includes(close.dataset.close)) {
+    if (close.dataset.close === "detailsPanel") closeBookingOverlays();
+    else document.getElementById(close.dataset.close).hidden = true;
+    if (close.dataset.close === "bookingMenu") {
       selectedBookingId = null;
       selectedBookingView = "";
     }

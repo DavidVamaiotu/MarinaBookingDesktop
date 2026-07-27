@@ -10,7 +10,7 @@ const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
 const stylesSource = fs.readFileSync(path.join(__dirname, "..", "styles.css"), "utf8");
 
 test("reservation editor groups fields under clear Romanian sections", () => {
-  for (const label of ["Sejur / Rezervare", "Client", "Sumar preț", "Notă internă", "Plată avans", "Acțiuni"]) {
+  for (const label of ["Sejur / Rezervare", "Client", "Notă internă", "Plată avans", "Acțiuni"]) {
     assert.match(indexSource, new RegExp(label));
   }
   for (const technicalLabel of ["Status sincronizare", "ID local", "Istoric sincronizare"]) assert.doesNotMatch(indexSource, new RegExp(technicalLabel));
@@ -19,15 +19,27 @@ test("reservation editor groups fields under clear Romanian sections", () => {
   assert.ok(indexSource.indexOf("<h3>Client</h3>") < indexSource.indexOf("<h3>Sejur / Rezervare</h3>"));
 });
 
-test("reservation editor price summary is read-only and follows the existing note", () => {
+test("reservation editor shows the saved price and an opt-in note replacement control", () => {
   assert.match(indexSource, /id="detailsPriceTotal">—/);
   assert.match(indexSource, /id="detailsPriceDeposit">—/);
   assert.match(indexSource, /id="detailsPriceBalance">—/);
-  assert.match(appSource, /function renderDetailsPrice\(note\)/);
-  assert.match(appSource, /const pricing = PricingNote\.parse\(note\)/);
-  assert.match(appSource, /renderDetailsPrice\(form\.elements\.note\.value\)/);
-  assert.match(appSource, /event\.target\.matches\('\[name="note"\]'\)\) renderDetailsPrice\(event\.target\.value\)/);
+  assert.match(indexSource, /<input name="replaceNoteWithPrice" type="checkbox">/);
+  assert.doesNotMatch(indexSource, /name="replaceNoteWithPrice"[^>]*checked/);
   assert.doesNotMatch(indexSource, /name="detailsPrice/);
+  const calendarSummary = indexSource.indexOf('id="detailsAvailability"');
+  const priceSummary = indexSource.indexOf('id="detailsPriceSummary"');
+  const guestCounts = indexSource.indexOf('name="adults"');
+  assert.ok(calendarSummary < priceSummary && priceSummary < guestCounts);
+});
+
+test("reservation editor reuses the create calendar, availability, and quote flow", () => {
+  assert.match(indexSource, /id="detailsCalendar"/);
+  assert.match(indexSource, /id="detailsDateSummary"/);
+  assert.match(indexSource, /id="detailsPricing"/);
+  assert.match(indexSource, /id="detailsAvailability"/);
+  assert.match(appSource, /function calendarForm\(\)/);
+  assert.match(appSource, /calendarElement\("#createCalendar", "#detailsCalendar"\)/);
+  assert.match(appSource, /\$\("#detailsCalendar"\)\.addEventListener\("click", handleBookingCalendarClick\)/);
 });
 
 test("reservation editor reference styling remains scoped and responsive", () => {
@@ -63,10 +75,13 @@ test("common WordPress fields receive understandable labels", () => {
 });
 
 test("adult and child counts are always editable, including zero children", () => {
-  assert.match(indexSource, /Număr adulți<input name="visitors" type="number"/);
-  assert.match(indexSource, /Număr copii<input name="children" type="number"/);
+  assert.match(indexSource, /Număr adulți<select name="adults" required>/);
+  assert.match(indexSource, /Număr copii<select name="children" required>/);
   assert.doesNotMatch(indexSource, /id="extraFieldsSection" hidden/);
-  assert.match(appSource, /form\.elements\.children\.value = BookingFields\.value\(booking, "children"\) \|\| booking\.formData\?\.children_val\?\.value \|\| "0"/);
+  assert.match(appSource, /fillGuestCounts\(form, \{[\s\S]*adults: BookingFields\.value\(booking, "adults"\)/);
+  assert.match(appSource, /const adultLimit = Math\.max\(4, capacity, currentAdults\)/);
+  assert.match(appSource, /elements\.adults\.addEventListener\("change", schedulePriceCheck\)/);
+  assert.match(appSource, /elements\.children\.addEventListener\("change", schedulePriceCheck\)/);
   assert.match(appSource, /if \(booking\.formData\?\.children_val\) formData\.children_val = \{ \.\.\.booking\.formData\.children_val, value: children \}/);
 });
 
@@ -117,7 +132,7 @@ test("new reservations default to pending with notifications opt-in", () => {
   assert.match(appSource, /form\.elements\.approved\.checked = false/);
   assert.match(appSource, /form\.elements\.sendEmail\.checked = false/);
   assert.match(appSource, /sendEmail: Boolean\(form\.elements\.sendEmail\.checked\)/);
-  assert.match(appSource, /bookingFormType, note: form\.elements\.note\.value, sendEmail: Boolean\(form\.elements\.sendEmail\.checked\), source/);
+  assert.match(appSource, /bookingFormType, note, sendEmail: Boolean\(form\.elements\.sendEmail\.checked\), source/);
   assert.match(appSource, /sendEmail: false, source/);
 });
 

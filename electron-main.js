@@ -81,7 +81,10 @@ function registerIpc() {
     input = validate.object(input);
     const resourceId = Number(input.resourceId);
     if (!Number.isInteger(resourceId) || resourceId < 1) throw new TypeError("resourceId trebuie să fie pozitiv.");
-    return service.availability(resourceId, validate.availabilityDates(input.dates));
+    const excludeBookingId = input.excludeBookingId === undefined || input.excludeBookingId === null
+      ? undefined
+      : validate.id(input.excludeBookingId, "excludeBookingId");
+    return service.availability(resourceId, validate.availabilityDates(input.dates), { excludeBookingId });
   });
   ipcMain.handle("booking:quote", (_event, source, input) => contextFor(source).service.quote(validate.quoteInput(input)));
   ipcMain.handle("booking:quote-clear", (_event, source) => contextFor(source).service.clearQuoteCache());

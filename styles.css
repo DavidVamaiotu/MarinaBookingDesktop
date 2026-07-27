@@ -395,6 +395,14 @@ html,body{width:100%;height:100%;overflow:hidden}*{box-sizing:border-box}body{ma
 #detailsPanel .details-price-summary .details-price-balance{margin-top:1px;padding-top:8px;border-top:1px solid #e3e1db}
 #detailsPanel .details-price-summary .details-price-balance strong{color:#4d9349}
 #detailsPanel .details-price-summary.is-unavailable strong{color:#9ba29f}
+#detailsPanel .details-price-summary.is-stale strong{color:#858585}
+#detailsPanel .details-booking-calendar{width:100%}
+#detailsPanel .details-booking-calendar .booking-calendar-months{grid-template-columns:1fr}
+#detailsPanel .details-booking-calendar .booking-month:first-child{border-right:0;border-bottom:1px solid #ececec}
+#detailsPanel .details-booking-legend{flex-wrap:wrap;gap:8px 14px}
+#detailsPanel .details-booking-legend .legend-day{width:24px;height:24px}
+#detailsPanel .details-booking-summary{font-size:12px}
+#detailsPanel .details-calendar-pricing{display:grid;gap:10px;margin-top:2px}
 #detailsPanel .email-option{display:flex!important;align-items:center;gap:8px;padding:0;border-radius:0;background:transparent;color:#6b7571;font-size:13px;line-height:1.35}
 #detailsPanel .email-option input{flex:0 0 auto;width:16px;height:16px;margin:0;padding:0;border-radius:3px;box-shadow:none}
 #detailsPanel .details-save{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:50px;border:0;border-radius:7px;background:linear-gradient(105deg,#148d7e,#248775);box-shadow:0 2px 5px rgba(22,119,104,.18);font-size:16px;font-weight:600}

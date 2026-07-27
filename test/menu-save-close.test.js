@@ -11,12 +11,10 @@ function sourceBetween(start, end) {
   return appSource.slice(appSource.indexOf(start), appSource.indexOf(end));
 }
 
-test("booking overlays close before queued synchronization finishes", () => {
-  const detailsSave = sourceBetween('$("#detailsForm").addEventListener("submit"', '$("#detailsForm").addEventListener("input"');
+test("non-editor booking overlays close before queued synchronization finishes", () => {
   const depositSave = sourceBetween('$("#saveDeposit").addEventListener("click"', "async function queuePaymentEmail");
   const statusSave = sourceBetween('$("#bookingMenuStatus").addEventListener("click"', '$("#bookingMenuTrash").addEventListener("click"');
 
-  assert.match(detailsSave, /closeBookingOverlays\(\);\s*await runApiAction\("editBooking"/);
   assert.match(depositSave, /closeBookingOverlays\(\);\s*await runApiAction\("updateDeposit"/);
   assert.match(statusSave, /closeBookingOverlays\(\);\s*await runApiAction\("setStatus"/);
 });
