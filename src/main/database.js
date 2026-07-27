@@ -545,7 +545,8 @@ class BookingDatabase {
             nextBase.resourceId = Number(command.payload.resource_id);
             nextBase.dates = (command.payload.dates || []).map((value) => String(value).slice(0, 10));
             nextBase.formData = command.payload.form_data || {};
-            if (command.payload.note !== undefined) nextBase.note = command.payload.note;
+            if (result?.note !== undefined) nextBase.note = result.note;
+            else if (command.payload.note !== undefined) nextBase.note = command.payload.note;
           } else if (command.type === "deposit_update") {
             nextBase.note = result?.note || PricingNote.update(command.payload.expected_note, command.payload.deposit, command.payload.total).note;
           }

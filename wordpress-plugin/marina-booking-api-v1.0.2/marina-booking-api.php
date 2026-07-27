@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Marina Booking API
  * Description: Secure REST API bridge for Booking Calendar / Booking Calendar Pro.
- * Version: 1.0.7
+ * Version: 1.0.8
  * Requires Plugins: booking
  * Author: Marina Park
  * Requires at least: 6.5
@@ -16,7 +16,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 final class Marina_Booking_API {
 
-	const VERSION   = '1.0.7';
+	const VERSION   = '1.0.8';
 	const SCHEMA_VERSION = '1.0.2';
 	const IDEMPOTENCY_TABLE_SUFFIX = 'marina_booking_api_idempotency';
 	const NAMESPACE = 'marina-booking/v1';
@@ -1966,7 +1966,7 @@ final class Marina_Booking_API {
 				self::release_idempotency_reservation( $id );
 				return $result;
 			}
-			$response = rest_ensure_response( $result );
+			$response = rest_convert_error_to_response( $result );
 			self::complete_idempotency_record( $id, $response, 0 );
 			return $result;
 		}

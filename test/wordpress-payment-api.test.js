@@ -7,8 +7,8 @@ const path = require("node:path");
 
 const source = readFileSync(path.join(__dirname, "..", "wordpress-plugin", "marina-booking-api-v1.0.2", "marina-booking-api.php"), "utf8");
 
-test("WordPress bridge v1.0.7 exposes idempotent deposit and payment-request routes", () => {
-  assert.match(source, /Version: 1\.0\.7/);
+test("WordPress bridge v1.0.8 exposes idempotent deposit and payment-request routes", () => {
+  assert.match(source, /Version: 1\.0\.8/);
   assert.match(source, /'\/bookings\/\(\?P<id>\\\\d\+\)\/payment'/);
   assert.match(source, /'\/bookings\/\(\?P<id>\\\\d\+\)\/deposit'/);
   assert.match(source, /'\/bookings\/\(\?P<id>\\\\d\+\)\/payment-request'/);
@@ -69,6 +69,11 @@ test("known server failures release their idempotency reservation for same-key r
   assert.match(source, /release_idempotency_reservation\( \$id \)/);
   assert.match(source, /'state' => 'processing'/);
   assert.match(source, /catch \( Throwable \$exception \)[\s\S]*mark_idempotency_unknown/);
+});
+
+test("idempotent validation errors are converted before storing their REST response", () => {
+  assert.match(source, /\$response = rest_convert_error_to_response\( \$result \);\s*self::complete_idempotency_record\( \$id, \$response, 0 \);/);
+  assert.doesNotMatch(source, /\$response = rest_ensure_response\( \$result \);\s*self::complete_idempotency_record\( \$id, \$response, 0 \);/);
 });
 
 test("price previews use the read-only rate-limit bucket with the full REST route", () => {

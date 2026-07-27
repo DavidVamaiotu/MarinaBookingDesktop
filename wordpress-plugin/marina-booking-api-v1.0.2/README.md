@@ -1,4 +1,8 @@
-# Marina Booking API v1.0.7
+# Marina Booking API v1.0.8
+
+## New in v1.0.8: safe idempotent validation errors
+
+Idempotent write endpoints now convert WordPress validation errors to REST responses before storing them. This prevents a PHP `TypeError` from replacing the real API error whenever a note conflict or another non-server validation error occurs.
 
 ## New in v1.0.7: safe direct note and deposit updates
 

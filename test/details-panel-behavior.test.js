@@ -301,7 +301,8 @@ function saveHarness({
   replaceNoteWithPrice = false,
   pricingChanged = true,
   failEdit = false,
-  failDeposit = false
+  failDeposit = false,
+  confirmedNote
 } = {}) {
   const calls = [];
   const events = [];
@@ -348,6 +349,7 @@ function saveHarness({
         calls.push(args);
         if (args[0] === "editBooking" && failEdit) throw new Error("edit failed");
         if (args[0] === "updateDeposit" && failDeposit) throw new Error("deposit failed");
+        if (args[0] === "editBooking") return { note: confirmedNote ?? args[2].note };
       },
       closeBookingOverlays() { events.push("close"); closeCount += 1; }
     }
@@ -367,7 +369,8 @@ test("save preserves the old note and deposit when note replacement is not selec
 });
 
 test("save persists the newly quoted note and deposit only after recalculation is selected", async () => {
-  const replacing = saveHarness({ replaceNoteWithPrice: true });
+  const confirmedNote = "Nota veche fără preț Cost total: 225 RON, Depozit: 75 RON, Rest: 150 RON";
+  const replacing = saveHarness({ replaceNoteWithPrice: true, confirmedNote });
   await replacing.saveBookingDetails(replacing.booking, replacing.form);
   assert.equal(JSON.stringify(replacing.refreshCalls), JSON.stringify([{ forceFresh: true }]));
   assert.deepEqual(replacing.events, ["editBooking", "updateDeposit", "close"]);
@@ -378,11 +381,11 @@ test("save persists the newly quoted note and deposit only after recalculation i
     JSON.stringify({
       deposit: 75,
       total: 225,
-      note: "Nota veche fără preț\nCost total: 225 RON, Depozit: 75 RON, Rest: 150 RON",
+      note: confirmedNote,
       source: "rooms"
     })
   );
-  assert.equal(replacing.form.elements.note.value, "Nota veche fără preț\nCost total: 225 RON, Depozit: 75 RON, Rest: 150 RON");
+  assert.equal(replacing.form.elements.note.value, confirmedNote);
   assert.equal(replacing.closeCount(), 1);
 });
 
@@ -406,11 +409,12 @@ test("a failed Edit Client reservation update leaves the sidebar and draft intac
 });
 
 test("a failed deposit update leaves the sidebar open and reflects the already-saved recalculated note", async () => {
-  const harness = saveHarness({ replaceNoteWithPrice: true, failDeposit: true });
+  const confirmedNote = "Nota veche fără preț Cost total: 225 RON, Depozit: 75 RON, Rest: 150 RON";
+  const harness = saveHarness({ replaceNoteWithPrice: true, failDeposit: true, confirmedNote });
 
   await assert.rejects(() => harness.saveBookingDetails(harness.booking, harness.form), /deposit failed/);
 
   assert.deepEqual(harness.events, ["editBooking", "updateDeposit"]);
   assert.equal(harness.closeCount(), 0);
-  assert.equal(harness.form.elements.note.value, "Nota veche fără preț\nCost total: 225 RON, Depozit: 75 RON, Rest: 150 RON");
+  assert.equal(harness.form.elements.note.value, confirmedNote);
 });

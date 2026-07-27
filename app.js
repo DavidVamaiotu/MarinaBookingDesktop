@@ -2528,12 +2528,13 @@ async function saveBookingDetails(booking, form) {
     if (source !== activeWorkspace || selectedBookingId !== booking.localId) throw workspaceChangedError();
     const formData = detailsFormData(booking, form);
     const outboundFormData = BookingFields.prepareFormData(formData, booking.resourceId);
-    await runApiAction("editBooking", booking.localId, { resourceId, sourceResourceId: booking.resourceId, dates, formData: outboundFormData, bookingFormType, note, sendEmail: Boolean(form.elements.sendEmail.checked), source });
+    const savedBooking = await runApiAction("editBooking", booking.localId, { resourceId, sourceResourceId: booking.resourceId, dates, formData: outboundFormData, bookingFormType, note, sendEmail: Boolean(form.elements.sendEmail.checked), source });
     if (recalculatedQuote) {
-      form.elements.note.value = note;
+      const confirmedNote = typeof savedBooking?.note === "string" ? savedBooking.note : note;
+      form.elements.note.value = confirmedNote;
       paymentSnapshots.delete(booking.localId);
       paymentSnapshotErrors.delete(booking.localId);
-      await runApiAction("updateDeposit", booking.localId, { deposit: recalculatedQuote.deposit, total: recalculatedQuote.total, note, source });
+      await runApiAction("updateDeposit", booking.localId, { deposit: recalculatedQuote.deposit, total: recalculatedQuote.total, note: confirmedNote, source });
       detailsInitialQuoteKey = currentQuoteKey(form);
     }
     if (source === activeWorkspace && selectedBookingId === booking.localId && selectedBookingView === "edit") closeBookingOverlays();

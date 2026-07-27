@@ -30,6 +30,18 @@ test("resource edits carry the booking note in the same API command", () => {
   db.close();
 });
 
+test("a confirmed edit stores the exact note returned by WordPress", () => {
+  const db = new BookingDatabase(":memory:");
+  db.writeBooking({ serverId: 703, resourceId: 31, dates: ["2026-07-20", "2026-07-21"], formData: input().formData, note: "Old note", status: "approved" });
+  const edit = db.optimisticUpdate("server:703", { note: "Line one\nCost total: 225 RON" }, "edit");
+  const command = db.getCommand(edit.commandId);
+
+  db.markCommandSynced(command, { booking_id: 703, note: "Line one Cost total: 225 RON" });
+
+  assert.equal(db.bookingRow("server:703").note, "Line one Cost total: 225 RON");
+  db.close();
+});
+
 test("customer details survive API normalization and the normalized SQLite field table", () => {
   const db = new BookingDatabase(":memory:");
   const formData = normalizeFormData({ cerere_client7: { field_value: "Cameră liniștită", field_type: "textarea" } });

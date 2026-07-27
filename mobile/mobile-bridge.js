@@ -802,7 +802,8 @@ if (!window.marina) {
       endDate: rebasedPatch.dates.at(-1) || "",
       formData: canonicalValue(rebasedPatch.formData)
     };
-    if (rebasedPatch.note !== undefined) cachePatch.note = String(rebasedPatch.note);
+    if (payload?.note !== undefined) cachePatch.note = String(payload.note);
+    else if (rebasedPatch.note !== undefined) cachePatch.note = String(rebasedPatch.note);
     await updateCachedBooking(source, bookingId, cachePatch);
     await refreshAfterMutation(source, currentRange);
     return { ...payload, localId: action.bookingLocalId, resourceId: Number(rebasedPatch.resourceId) };
