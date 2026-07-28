@@ -146,6 +146,7 @@ let cameraPanState = null;
 let lastCameraPanEndedAt = 0;
 let wheelPinchState = null;
 let timelineRows = [];
+let monthDividerDays = [];
 let rowRenderFrame = null;
 let selectedBookingId = null;
 let selectedBookingView = "";
@@ -394,11 +395,13 @@ function renderCameraState() {
   cameraContent.style.willChange = cameraInteractionActive ? "transform" : "auto";
   if (!cameraInteractionActive && cameraScale === 1 && cameraOffsetX === 0 && cameraOffsetY === 0) {
     cameraContent.style.transform = "none";
+    updateStickyReservationLabels();
     return;
   }
   const translate = cameraInteractionActive ? "translate3d" : "translate";
   const suffix = cameraInteractionActive ? ", 0" : "";
   cameraContent.style.transform = `${translate}(${cameraOffsetX}px, ${cameraOffsetY}px${suffix}) scale(${cameraScale})`;
+  updateStickyReservationLabels();
 }
 
 function beginCameraInteraction() {
@@ -774,10 +777,10 @@ function updateDateGridBackground() {
   const grids = [];
   const positions = [];
   const sizes = [];
+  monthDividerDays = [];
   for (let start = 0; start < dayCount;) {
     let end = Math.min(dayCount, start + DATE_GRID_CHUNK_DAYS);
     if (end < dayCount && addDays(windowStart, end).getUTCDate() === 1) end -= 1;
-    const monthLines = [];
     const cells = Array.from({ length: end - start }, (_, offset) => {
       const date = addDays(windowStart, start + offset);
       const value = iso(date);
@@ -790,19 +793,32 @@ function updateDateGridBackground() {
         ? `<rect x="${x}" y="0" width="${dayWidth}" height="${rowHeight}" fill="#edf8f1"/>`
         : past ? `<rect x="${x}" y="0" width="${dayWidth}" height="${rowHeight}" fill="#fcfcfb"/>`
           : weekend ? `<rect x="${x}" y="0" width="${dayWidth}" height="${rowHeight}" fill="#fffafa"/>` : "";
-      if (addDays(date, 1).getUTCMonth() !== date.getUTCMonth()) monthLines.push(`<line x1="${x + dayWidth}" y1="0" x2="${x + dayWidth}" y2="${rowHeight}" stroke="#d64545" stroke-width="3"/>`);
-      return `${background}<text x="${x + dayWidth / 2}" y="${rowHeight / 2 + 3}" text-anchor="middle" fill="${fill}" font-family="Arial,sans-serif" font-size="10" font-weight="600">${String(date.getUTCDate()).padStart(2, "0")}</text>`;
+      if (start + offset + 1 < dayCount && addDays(date, 1).getUTCMonth() !== date.getUTCMonth()) monthDividerDays.push(start + offset + 1);
+      return `${background}<text x="${x + dayWidth / 2}" y="${rowHeight / 2 + 3}" text-anchor="middle" fill="${fill}" font-family="Arial,sans-serif" font-size="10" font-weight="300">${String(date.getUTCDate()).padStart(2, "0")}</text>`;
     }).join("");
     const width = (end - start) * dayWidth;
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${rowHeight}" viewBox="0 0 ${width} ${rowHeight}">${cells}${monthLines.join("")}</svg>`;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${rowHeight}" viewBox="0 0 ${width} ${rowHeight}">${cells}</svg>`;
     grids.push(`url("data:image/svg+xml;base64,${window.btoa(svg)}")`);
-    positions.push(`${start * dayWidth}px 4px`);
+    positions.push(`${start * dayWidth}px 0`);
     sizes.push(`${width}px ${rowHeight}px`);
     start = end;
   }
   timelineShell.style.setProperty("--timeline-date-grid", grids.join(","));
   timelineShell.style.setProperty("--timeline-date-grid-position", positions.join(","));
   timelineShell.style.setProperty("--timeline-date-grid-size", sizes.join(","));
+}
+
+function syncMonthDividers(element) {
+  const dividers = [...element.querySelectorAll(":scope > .timeline-month-divider")];
+  monthDividerDays.forEach((dayIndex, index) => {
+    const divider = dividers[index] || document.createElement("span");
+    if (!dividers[index]) {
+      divider.className = "timeline-month-divider";
+      element.insertBefore(divider, element.querySelector(":scope > .timeline-bar"));
+    }
+    divider.style.setProperty("--timeline-month-divider-day", dayIndex);
+  });
+  dividers.slice(monthDividerDays.length).forEach((divider) => divider.remove());
 }
 
 function assignLanes(items) {
@@ -938,6 +954,7 @@ function syncRow(element, row, virtualized) {
   label.querySelector("strong").textContent = row.resource.title;
   label.title = row.resource.title;
   label.querySelector("span").textContent = row.resource.subtitle;
+  syncMonthDividers(element);
   const existing = new Map([...element.querySelectorAll(":scope > .timeline-bar")].map((bar) => [bar.dataset.bookingId, bar]));
   for (const { item, lane, predecessorKey } of row.layout.items) {
     const signature = barSignature(item, lane, predecessorKey);
@@ -956,6 +973,7 @@ function updateLabelShifts(row) {
   const bars = [...row.querySelectorAll(":scope > .timeline-bar")];
   const byKey = new Map(bars.map((bar) => [bar.dataset.bookingId, bar]));
   bars.forEach((bar) => bar.style.setProperty("--timeline-label-shift", "0px"));
+  bars.forEach((bar) => bar.querySelector(".timeline-bar-label")?.style.setProperty("--timeline-sticky-label-shift", "0px"));
   const bounds = new Map(bars.map((bar) => [bar.dataset.bookingId, bar.querySelector(".timeline-bar-guest")?.getBoundingClientRect()]));
   for (const bar of bars) {
     const predecessor = byKey.get(bar.dataset.handoffPredecessorKey);
@@ -965,6 +983,20 @@ function updateLabelShifts(row) {
     const shift = Math.min(48, Math.max(12, Math.ceil((previousBounds.right - currentBounds.left) / cameraScale + 6)));
     bar.style.setProperty("--timeline-label-shift", `${shift}px`);
   }
+}
+
+function updateStickyReservationLabels() {
+  const hasCameraScale = cameraScale > 1.001;
+  timelineShell.classList.toggle("has-camera-scale", hasCameraScale);
+  if (!hasCameraScale) {
+    TimelineStickyLabels.reset(guestTimeline);
+    return;
+  }
+  TimelineStickyLabels.update({
+    viewport: cameraViewport,
+    rows: guestTimeline,
+    scale: cameraScale
+  });
 }
 
 function renderVisibleRows(force = false) {
@@ -987,6 +1019,7 @@ function renderVisibleRows(force = false) {
   elements.forEach((element, index) => {
     if (force || guestTimeline.children[index] !== element) guestTimeline.insertBefore(element, guestTimeline.children[index] || null);
   });
+  updateStickyReservationLabels();
 }
 
 function queueRowRender() {
@@ -1001,6 +1034,7 @@ function renderTimeline({ preserveScroll = true } = {}) {
   updateDateGridBackground();
   prepareRows();
   if (preserveScroll) { timelineShell.scrollLeft = left; timelineShell.scrollTop = top; lastScrollLeft = left; }
+  updateStickyReservationLabels();
 }
 
 function availabilityCellLabel(cell) {
@@ -2284,6 +2318,7 @@ function recenterTimelineWindow(force = false) {
 
 function handleTimelineScroll() {
   dismissBookingMenu();
+  if (cameraScale > 1.001) updateStickyReservationLabels();
   const horizontal = Math.abs(timelineShell.scrollLeft - lastScrollLeft) >= 1;
   lastScrollLeft = timelineShell.scrollLeft;
   if (horizontal) recenterTimelineWindow();

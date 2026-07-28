@@ -103,12 +103,17 @@ test("availability timeline uses native two-axis scrolling and lazy edge shifts"
 test("each stacked reservation lane receives its own compact date strip", () => {
   const dateGridSource = appSource.slice(appSource.indexOf("function updateDateGridBackground"), appSource.indexOf("function assignLanes"));
   assert.match(dateGridSource, /const rowHeight = LANE_HEIGHT/);
-  assert.match(dateGridSource, /\$\{cells\}\$\{monthLines\.join\(""\)\}/);
+  assert.match(dateGridSource, /monthDividerDays = \[\]/);
+  assert.match(dateGridSource, /monthDividerDays\.push\(start \+ offset \+ 1\)/);
+  assert.match(dateGridSource, /function syncMonthDividers\(element\)/);
   assert.match(appSource, /const DATE_GRID_CHUNK_DAYS = 28/);
   assert.match(dateGridSource, /start \+ DATE_GRID_CHUNK_DAYS/);
+  assert.match(dateGridSource, /positions\.push\(`\$\{start \* dayWidth\}px 0`\)/);
+  assert.match(appSource, /layout\.count \* LANE_HEIGHT \+ 8/);
   assert.match(dateGridSource, /--timeline-date-grid-position/);
   assert.match(dateGridSource, /--timeline-date-grid-size/);
-  assert.match(stylesSource, /\.timeline-row::before\{[^}]*inset:0 0 -1px var\(--timeline-unit-width\)[^}]*background-repeat:repeat-y[^}]*background-position:var\(--timeline-date-grid-position\)[^}]*background-size:var\(--timeline-date-grid-size\)/);
+  assert.match(stylesSource, /\.timeline-row::before\{[^}]*inset:4px 0 4px var\(--timeline-unit-width\)[^}]*background-repeat:repeat-y[^}]*background-position:var\(--timeline-date-grid-position\)[^}]*background-size:var\(--timeline-date-grid-size\)/);
+  assert.match(stylesSource, /\.timeline-month-divider\{[^}]*top:0[^}]*bottom:-2px[^}]*width:3px[^}]*background:#d64545/);
   assert.match(stylesSource, /\.guest-timeline\{display:grid;align-content:start/);
 });
 
@@ -144,8 +149,12 @@ test("past timeline days and only the past segment of reservations are faded", (
   assert.doesNotMatch(appSource, /function updateRenderedPastWidths/);
   assert.match(stylesSource, /--timeline-booking-bg:#ffeead/);
   assert.match(stylesSource, /--timeline-booking-bg:#6aa352/);
+  assert.match(stylesSource, /--timeline-booking-overlay:#ffeca4/);
+  assert.match(stylesSource, /--timeline-booking-overlay:#59993f/);
+  assert.match(stylesSource, /\.timeline-bar:not\(\.is-open\)::before\{[^}]*opacity:\.9/);
+  assert.match(stylesSource, /\.timeline-bar-content \.timeline-bar-guest\{[^}]*color:#fff[^}]*font-weight:400/);
   assert.match(stylesSource, /--timeline-booking-bg-past:#adcda0/);
-  assert.match(stylesSource, /linear-gradient\(to right,var\(--timeline-booking-bg-past\) 0 var\(--timeline-past-width\),var\(--timeline-booking-bg\) var\(--timeline-past-width\) 100%\)/);
+  assert.match(stylesSource, /linear-gradient\(to right,var\(--timeline-booking-bg-past\) 0 var\(--timeline-past-width\),var\(--timeline-booking-overlay\) var\(--timeline-past-width\) 100%\)/);
   assert.match(stylesSource, /\.timeline-scale \.timeline-day\.is-past/);
 });
 
