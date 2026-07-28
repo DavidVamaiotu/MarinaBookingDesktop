@@ -151,6 +151,7 @@ test("past timeline days and only the past segment of reservations are faded", (
   assert.match(stylesSource, /--timeline-booking-bg:#6aa352/);
   assert.match(stylesSource, /--timeline-booking-overlay:#ffeca4/);
   assert.match(stylesSource, /--timeline-booking-overlay:#59993f/);
+  assert.match(stylesSource, /\.timeline-bar,\.timeline-bar\.is-paid,\.timeline-bar\.is-unpaid\{[^}]*align-self:stretch[^}]*min-height:34px;margin:0/);
   assert.match(stylesSource, /\.timeline-bar:not\(\.is-open\)::before\{[^}]*opacity:\.9/);
   assert.match(stylesSource, /\.timeline-bar-content \.timeline-bar-guest\{[^}]*color:#fff[^}]*font-weight:400/);
   assert.match(stylesSource, /--timeline-booking-bg-past:#adcda0/);
