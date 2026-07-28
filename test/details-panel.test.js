@@ -72,6 +72,9 @@ test("reservation editor reference styling remains scoped and responsive", () =>
   assert.match(stylesSource, /#detailsPanel \.field-grid\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
   assert.match(stylesSource, /@media\(max-width:620px\)\{[\s\S]*#detailsPanel\{inset:0;width:100vw/);
   assert.match(stylesSource, /#detailsPanel \.details-save\{[^}]*background:linear-gradient/);
+  assert.match(stylesSource, /@media\(min-width:700px\) and \(max-width:1200px\)\{[\s\S]*\.is-mobile-app #detailsPanel>header/);
+  assert.match(stylesSource, /\.is-mobile-app #detailsPanel \.panel-form input,[\s\S]*height:44px/);
+  assert.match(stylesSource, /\.is-mobile-app #detailsPanel \.calendar-grid\{grid-template-rows:repeat\(6,38px\)/);
 });
 
 test("reservation editor reports invalid fields instead of letting native validation fail silently", () => {

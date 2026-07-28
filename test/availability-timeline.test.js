@@ -83,6 +83,8 @@ test("availability page is one bounded, lazy, horizontally scrolling timeline", 
   assert.match(html, /id="openAvailability"/);
   assert.match(html, /id="availabilityPage"[^>]*hidden/);
   assert.match(html, /id="closeAvailability"/);
+  assert.match(html, /class="availability-legend"[\s\S]*id="closeAvailability"/);
+  assert.doesNotMatch(css, /#closeAvailability\{[^}]*margin-right:auto/);
   assert.doesNotMatch(html, /id="availabilityPrev"|id="availabilityNext"|id="availabilityMonthLabel"/);
   assert.match(app, /const AVAILABILITY_WINDOW_DAYS = 84/);
   assert.match(app, /const AVAILABILITY_WINDOW_SHIFT_DAYS = 35/);
@@ -107,6 +109,7 @@ test("availability page is one bounded, lazy, horizontally scrolling timeline", 
   assert.match(css, /\.availability-months\{[^}]*grid-column:2\/-1[^}]*grid-template-columns:repeat\(var\(--availability-days\),var\(--availability-day-width\)\)/);
   assert.match(css, /\.availability-month\{[^}]*box-shadow:inset 2px 0 #437581/);
   assert.match(css, /\.availability-month-days-31\{grid-column:span 31\}/);
+  assert.match(css, /@media\(max-width:900px\)\{[\s\S]*\.availability-header\{display:grid;grid-template-columns:minmax\(0,1fr\);padding-inline:0\}[\s\S]*\.availability-actions\{width:100%;justify-content:flex-end\}/);
   assert.match(css, /\.is-mobile-app \.availability-cell\[data-am="available"\]\[data-pm="occupied"\]::before\{clip-path:polygon\(100% 0,100% 100%,0 100%\)\}/);
   assert.match(css, /\.is-mobile-app \.availability-cell\[data-am="occupied"\]\[data-pm="available"\]::before\{clip-path:polygon\(0 0,100% 0,0 100%\)\}/);
   assert.match(mobileBuild, /availability-timeline\.js/);

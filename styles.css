@@ -270,7 +270,6 @@ html,body{width:100%;height:100%;overflow:hidden}*{box-sizing:border-box}body{ma
 .availability-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 .availability-actions>button{min-width:38px;padding:7px 11px;border:1px solid var(--line);border-radius:9px;background:#faf9f4;color:#26322f}
 .availability-legend{display:flex;align-items:center;gap:6px;margin-right:8px;color:var(--muted);font-size:11px}
-#closeAvailability{margin-right:auto}
 .availability-legend i{width:16px;height:16px;border:1px solid #39752f;background:#4f941f}
 .availability-grid{--availability-days:84;--availability-resource-width:170px;--availability-day-width:36px;display:grid;grid-template-columns:var(--availability-resource-width) repeat(var(--availability-days),var(--availability-day-width));grid-auto-rows:auto;align-content:start;min-width:0;overflow:auto;overscroll-behavior:contain;scroll-behavior:auto;touch-action:pan-x pan-y;border:1px solid #64747a;border-radius:5px;background:#fff;font-family:Arial,sans-serif}
 .availability-corner,.availability-months,.availability-month,.availability-date-number,.availability-room,.availability-cell{min-width:0;border-right:1px solid #718087;border-bottom:1px solid #718087}
@@ -287,7 +286,7 @@ html,body{width:100%;height:100%;overflow:hidden}*{box-sizing:border-box}body{ma
 .availability-cell[data-am="occupied"][data-pm="available"]{background:linear-gradient(135deg,#4f941f 0 49%,#fff 51% 100%)}
 .availability-date-number.is-month-start,.availability-cell.is-month-start{border-left:2px solid #437581}
 @media(max-width:900px){
-  .availability-header{display:grid}.availability-header>div:first-child{display:none}.availability-actions{justify-content:center}
+  .availability-header{display:grid;grid-template-columns:minmax(0,1fr);padding-inline:0}.availability-header>div:first-child{display:none}.availability-actions{width:100%;justify-content:flex-end}
   .availability-legend{margin-right:auto}
   .availability-grid{--availability-resource-width:112px;--availability-day-width:28px}
   .availability-room{padding:4px;font-size:9px}.availability-date-number{font-size:8px}.availability-cell{font-size:9px}
@@ -421,5 +420,33 @@ html,body{width:100%;height:100%;overflow:hidden}*{box-sizing:border-box}body{ma
   #detailsPanel{inset:0;width:100vw;max-width:none;height:100dvh;border:0}
   #detailsPanel>header{padding:max(18px,env(safe-area-inset-top)) 18px 15px}
   #detailsForm{min-height:0;padding:0 18px max(18px,env(safe-area-inset-bottom));overflow-y:auto}
+}
+/* Slightly denser editor for the unfolded Fold 7/native tablet-sized viewport. */
+@media(min-width:700px) and (max-width:1200px){
+  .is-mobile-app #detailsPanel>header{padding:17px 18px 13px}
+  .is-mobile-app #detailsPanel>header h2{margin-top:4px;font-size:22px}
+  .is-mobile-app #detailsForm{gap:8px;padding:0 16px 16px}
+  .is-mobile-app #detailsPanel .details-section{gap:10px;padding:14px 15px}
+  .is-mobile-app #detailsPanel .details-section>header{gap:7px}
+  .is-mobile-app #detailsPanel .details-section>header h3{font-size:14px}
+  .is-mobile-app #detailsPanel .panel-form label{gap:5px;font-size:12.5px}
+  .is-mobile-app #detailsPanel .field-grid{gap:6px 10px}
+  .is-mobile-app #detailsPanel .panel-form input,
+  .is-mobile-app #detailsPanel .panel-form select,
+  .is-mobile-app #detailsPanel .panel-form textarea{font-size:14px}
+  .is-mobile-app #detailsPanel .panel-form input,
+  .is-mobile-app #detailsPanel .panel-form select{height:44px;padding:7px 11px}
+  .is-mobile-app #detailsPanel .panel-form textarea{min-height:68px;padding:9px 11px}
+  .is-mobile-app #detailsPanel .booking-month>header{height:36px}
+  .is-mobile-app #detailsPanel .calendar-nav{height:36px;line-height:36px}
+  .is-mobile-app #detailsPanel .calendar-grid{grid-template-rows:repeat(6,38px)}
+  .is-mobile-app #detailsPanel .calendar-day{height:38px}
+  .is-mobile-app #detailsPanel .details-booking-legend{gap:6px 12px}
+  .is-mobile-app #detailsPanel .details-booking-legend .legend-day{width:22px;height:22px}
+  .is-mobile-app #detailsPanel .details-calendar-pricing{gap:8px}
+  .is-mobile-app #detailsPanel .details-price-summary{gap:6px}
+  .is-mobile-app #detailsPanel .details-save{min-height:48px;font-size:15px}
+  .is-mobile-app #detailsPanel .details-reservation-actions{gap:8px}
+  .is-mobile-app #detailsPanel .details-reservation-actions button{min-height:46px;padding:8px 12px}
 }
 @media(max-width:350px){#detailsPanel .field-grid{grid-template-columns:1fr}#detailsPanel .field-grid .span-2{grid-column:auto}#detailsPanel .details-price-summary{padding-left:0}}
