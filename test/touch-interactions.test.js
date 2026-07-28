@@ -113,7 +113,7 @@ test("each stacked reservation lane receives its own compact date strip", () => 
   assert.match(dateGridSource, /--timeline-date-grid-position/);
   assert.match(dateGridSource, /--timeline-date-grid-size/);
   assert.match(stylesSource, /\.timeline-row::before\{[^}]*inset:4px 0 4px var\(--timeline-unit-width\)[^}]*background-repeat:repeat-y[^}]*background-position:var\(--timeline-date-grid-position\)[^}]*background-size:var\(--timeline-date-grid-size\)/);
-  assert.match(stylesSource, /\.timeline-month-divider\{[^}]*top:0[^}]*bottom:-2px[^}]*width:3px[^}]*background:#d64545/);
+  assert.match(stylesSource, /\.timeline-month-divider\{[^}]*z-index:10[^}]*top:0[^}]*bottom:-2px[^}]*width:3px[^}]*background:#a52f2f/);
   assert.match(stylesSource, /\.guest-timeline\{display:grid;align-content:start/);
 });
 
@@ -121,6 +121,9 @@ test("phone and Fold timelines keep enough width for complete room identifiers",
   assert.match(stylesSource, /@media\(max-width:900px\)[\s\S]*--timeline-unit-width:150px/);
   assert.match(stylesSource, /\.timeline-unit strong\{overflow:visible;font-size:10px;text-overflow:clip;white-space:normal;overflow-wrap:anywhere\}/);
   assert.match(stylesSource, /@media\(min-width:600px\) and \(max-width:1100px\)[\s\S]*--timeline-unit-width:180px/);
+  assert.match(stylesSource, /@media\(min-width:600px\) and \(max-width:1100px\)\{[\s\S]*\.app-shell\{[^}]*padding:max\(4px,env\(safe-area-inset-top\)\) 4px max\(4px,env\(safe-area-inset-bottom\)\);gap:4px/);
+  assert.match(stylesSource, /@media\(min-width:600px\) and \(max-width:1100px\)\{[\s\S]*\.toolbar\{[^}]*gap:6px;padding:5px[^}]*\}[\s\S]*\.toolbar-actions>button\{min-height:38px/);
+  assert.match(stylesSource, /@media\(min-width:600px\) and \(max-width:1100px\)\{[\s\S]*\.timeline-panel\{padding:5px\}[\s\S]*\.timeline-header\{[^}]*padding-bottom:4px/);
   assert.match(appSource, /label\.title = row\.resource\.title/);
 });
 
@@ -150,9 +153,10 @@ test("past timeline days and only the past segment of reservations are faded", (
   assert.match(stylesSource, /--timeline-booking-bg:#ffeead/);
   assert.match(stylesSource, /--timeline-booking-bg:#6aa352/);
   assert.match(stylesSource, /--timeline-booking-overlay:#ffeca4/);
-  assert.match(stylesSource, /--timeline-booking-overlay:#59993f/);
+  assert.match(stylesSource, /--timeline-booking-overlay:#2a7c08/);
   assert.match(stylesSource, /\.timeline-bar,\.timeline-bar\.is-paid,\.timeline-bar\.is-unpaid\{[^}]*align-self:stretch[^}]*min-height:34px;margin:0/);
-  assert.match(stylesSource, /\.timeline-bar:not\(\.is-open\)::before\{[^}]*opacity:\.9/);
+  assert.match(stylesSource, /\.timeline-bar:not\(\.is-open\)::before\{[^}]*opacity:\.7/);
+  assert.match(stylesSource, /\.timeline-bar\.is-paid:not\(\.is-open\):hover::before\{[^}]*var\(--timeline-booking-bg\)/);
   assert.match(stylesSource, /\.timeline-bar-content \.timeline-bar-guest\{[^}]*color:#fff[^}]*font-weight:400/);
   assert.match(stylesSource, /--timeline-booking-bg-past:#adcda0/);
   assert.match(stylesSource, /linear-gradient\(to right,var\(--timeline-booking-bg-past\) 0 var\(--timeline-past-width\),var\(--timeline-booking-overlay\) var\(--timeline-past-width\) 100%\)/);

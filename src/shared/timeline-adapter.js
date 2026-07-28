@@ -32,7 +32,7 @@
     return resources.map((resource) => ({
       id: Number(resource.id),
       title: resource.title || `Resource ${resource.id}`,
-      subtitle: resource.capacity ? `Capacity ${resource.capacity}` : "Booking resource",
+      subtitle: "",
       items: items.filter((item) => item.resourceId === Number(resource.id))
     }));
   }
