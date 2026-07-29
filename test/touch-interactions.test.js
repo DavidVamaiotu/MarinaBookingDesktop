@@ -109,10 +109,10 @@ test("each stacked reservation lane receives its own compact date strip", () => 
   assert.match(appSource, /const DATE_GRID_CHUNK_DAYS = 28/);
   assert.match(dateGridSource, /start \+ DATE_GRID_CHUNK_DAYS/);
   assert.match(dateGridSource, /positions\.push\(`\$\{start \* dayWidth\}px 0`\)/);
-  assert.match(appSource, /layout\.count \* LANE_HEIGHT \+ 8/);
+  assert.match(appSource, /layout\.count \* LANE_HEIGHT \+ 4/);
   assert.match(dateGridSource, /--timeline-date-grid-position/);
   assert.match(dateGridSource, /--timeline-date-grid-size/);
-  assert.match(stylesSource, /\.timeline-row::before\{[^}]*inset:4px 0 4px var\(--timeline-unit-width\)[^}]*background-repeat:repeat-y[^}]*background-position:var\(--timeline-date-grid-position\)[^}]*background-size:var\(--timeline-date-grid-size\)/);
+  assert.match(stylesSource, /\.timeline-row::before\{[^}]*inset:2px 0 2px var\(--timeline-unit-width\)[^}]*background-repeat:repeat-y[^}]*background-position:var\(--timeline-date-grid-position\)[^}]*background-size:var\(--timeline-date-grid-size\)/);
   assert.match(stylesSource, /\.timeline-month-divider\{[^}]*z-index:10[^}]*top:0[^}]*bottom:-2px[^}]*width:3px[^}]*background:#a52f2f/);
   assert.match(stylesSource, /\.guest-timeline\{display:grid;align-content:start/);
 });
@@ -154,7 +154,7 @@ test("past timeline days and only the past segment of reservations are faded", (
   assert.match(stylesSource, /--timeline-booking-bg:#6aa352/);
   assert.match(stylesSource, /--timeline-booking-overlay:#ffeca4/);
   assert.match(stylesSource, /--timeline-booking-overlay:#2a7c08/);
-  assert.match(stylesSource, /\.timeline-bar,\.timeline-bar\.is-paid,\.timeline-bar\.is-unpaid\{[^}]*align-self:stretch[^}]*min-height:34px;margin:0/);
+  assert.match(stylesSource, /\.timeline-bar,\.timeline-bar\.is-paid,\.timeline-bar\.is-unpaid\{[^}]*align-self:stretch[^}]*min-height:32px;margin:0/);
   assert.match(stylesSource, /\.timeline-bar:not\(\.is-open\)::before\{[^}]*opacity:\.7/);
   assert.match(stylesSource, /\.timeline-bar\.is-paid:not\(\.is-open\):hover::before\{[^}]*var\(--timeline-booking-bg\)/);
   assert.match(stylesSource, /\.timeline-bar-content \.timeline-bar-guest\{[^}]*color:#fff[^}]*font-weight:400/);

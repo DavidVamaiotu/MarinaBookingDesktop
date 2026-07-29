@@ -36,8 +36,8 @@ const AVAILABILITY_WINDOW_SHIFT_DAYS = 35;
 const AVAILABILITY_EDGE_DAYS = 14;
 const MIN_AVAILABILITY_DAY_WIDTH = 24;
 const MAX_AVAILABILITY_DAY_WIDTH = 44;
-const ROW_BASE = 44;
-const LANE_HEIGHT = 34;
+const ROW_BASE = 36;
+const LANE_HEIGHT = 32;
 const DATE_GRID_CHUNK_DAYS = 28;
 const ROW_GAP = 1;
 const VIRTUAL_THRESHOLD = 60;
@@ -888,7 +888,7 @@ function prepareRows() {
   timelineRows = lanes.map((resource) => {
     const visibleItems = resource.items.filter((item) => item.start <= iso(windowEnd) && item.end >= iso(windowStart));
     const layout = assignLanes(visibleItems);
-    const height = Math.max(ROW_BASE, layout.count * LANE_HEIGHT + 8);
+    const height = Math.max(ROW_BASE, layout.count * LANE_HEIGHT + 4);
     const row = { resource, layout, top, height };
     top += height + ROW_GAP;
     return row;
