@@ -402,7 +402,7 @@ class BookingDatabase {
     const coalescible = new Set(["edit", "note"]);
     const timestamp = now();
     if (coalescible.has(type) && !options.noCoalesce) {
-      const existing = this.db.prepare("SELECT id FROM commands WHERE type=? AND booking_local_id=? AND status='queued' ORDER BY created_at DESC LIMIT 1").get(type, bookingLocalId);
+      const existing = this.db.prepare("SELECT id FROM commands WHERE type=? AND booking_local_id=? AND status='queued' AND attempts=0 ORDER BY created_at DESC LIMIT 1").get(type, bookingLocalId);
       if (existing) {
         this.db.prepare("UPDATE commands SET payload_json=?,resource_id=?,updated_at=?,available_at=?,error_code=NULL,error_message=NULL WHERE id=?").run(JSON.stringify(payload), resourceId ?? null, timestamp, timestamp, existing.id);
         return existing.id;

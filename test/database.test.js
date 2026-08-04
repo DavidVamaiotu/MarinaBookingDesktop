@@ -157,6 +157,33 @@ test("safe queued edits and notes coalesce but creates never coalesce", () => {
   db.close();
 });
 
+test("attempted queued edits and notes get a fresh idempotency key instead of coalescing", () => {
+  for (const type of ["edit", "note"]) {
+    const db = new BookingDatabase(":memory:");
+    db.writeBooking({ serverId: 704, resourceId: 4, dates: input().dates, formData: input().formData, status: "pending", note: "" });
+    const first = db.optimisticUpdate("server:704", type === "edit" ? { dates: ["2026-07-22"] } : { note: "first" }, type);
+    db.markSending(first.commandId);
+    db.markCommand(first.commandId, "queued", { code: "temporary_failure", message: "Retry later" });
+
+    const second = db.optimisticUpdate("server:704", type === "edit" ? { dates: ["2026-07-23"] } : { note: "second" }, type);
+    const firstCommand = db.getCommand(first.commandId);
+    const secondCommand = db.getCommand(second.commandId);
+
+    assert.notEqual(second.commandId, first.commandId);
+    assert.notEqual(secondCommand.idempotency_key, firstCommand.idempotency_key);
+    assert.equal(firstCommand.attempts, 1);
+    assert.equal(secondCommand.attempts, 0);
+    if (type === "edit") {
+      assert.deepEqual(firstCommand.payload.dates, ["2026-07-22 00:00:00"]);
+      assert.deepEqual(secondCommand.payload.dates, ["2026-07-23 00:00:00"]);
+    } else {
+      assert.equal(firstCommand.payload.note, "first");
+      assert.equal(secondCommand.payload.note, "second");
+    }
+    db.close();
+  }
+});
+
 test("queued status, note, trash and edit keep the last confirmed local state", () => {
   const db = new BookingDatabase(":memory:");
   const { booking } = db.optimisticCreate(input());
