@@ -62,7 +62,7 @@ test("continuous range crosses month and year boundaries without splitting occup
 });
 
 test("range builder rejects reversed ranges", () => {
-  assert.throws(() => buildRange(resources, [], "2027-01-02", "2027-01-01"), /must not be before/);
+  assert.throws(() => buildRange(resources, [], "2027-01-02", "2027-01-01"), /nu poate fi înaintea/);
 });
 
 test("availability can exclude every date before today without changing the full month", () => {

@@ -7,8 +7,8 @@ const path = require("node:path");
 
 const source = readFileSync(path.join(__dirname, "..", "wordpress-plugin", "marina-booking-api-v1.0.2", "marina-booking-api.php"), "utf8");
 
-test("WordPress bridge v1.0.8 exposes idempotent deposit and payment-request routes", () => {
-  assert.match(source, /Version: 1\.0\.8/);
+test("WordPress bridge v1.0.9 exposes idempotent deposit and payment-request routes", () => {
+  assert.match(source, /Version: 1\.0\.9/);
   assert.match(source, /'\/bookings\/\(\?P<id>\\\\d\+\)\/payment'/);
   assert.match(source, /'\/bookings\/\(\?P<id>\\\\d\+\)\/deposit'/);
   assert.match(source, /'\/bookings\/\(\?P<id>\\\\d\+\)\/payment-request'/);
@@ -79,4 +79,9 @@ test("idempotent validation errors are converted before storing their REST respo
 test("price previews use the read-only rate-limit bucket with the full REST route", () => {
   assert.match(source, /'\/' \. self::NAMESPACE \. '\/prices\/calculate' === untrailingslashit\( \(string\) \$request->get_route\(\) \)/);
   assert.match(source, /\( \$is_write && ! \$is_price_preview \) \? 60 : 300/);
+});
+
+test("rate-limit responses tell clients when the current bucket can be retried", () => {
+  assert.match(source, /'marina_booking_api_rate_limited'/);
+  assert.match(source, /array\( 'status' => 429, 'retry_after' => max\( 1, \( \( \$bucket \+ 1 \) \* \$window \) - \$now \) \)/);
 });

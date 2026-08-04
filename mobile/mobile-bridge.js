@@ -1027,14 +1027,13 @@ if (!window.marina) {
     let booking = pending.serverId ? { serverId: pending.serverId } : null;
     if (!booking) booking = await bookingByExternalId(pending.externalId, source, action.apiBaseUrl);
     if (!booking) {
-      await requireAvailability(source, action.apiBaseUrl, input.resourceId, dates);
       try {
         ({ payload } = await request("/bookings", {
           method: "POST",
           idempotencyKey: pending.externalId,
           expectedApiBaseUrl: action.apiBaseUrl,
           retry: false,
-          body: { resource_id: input.resourceId, dates, form_data: canonicalValue(input.formData), booking_form_type: input.bookingFormType || "", approved: Boolean(input.approved), send_email: Boolean(input.sendEmail), external_id: pending.externalId }
+          body: { resource_id: input.resourceId, dates, form_data: canonicalValue(input.formData), booking_form_type: input.bookingFormType || "", note: String(input.note || ""), approved: Boolean(input.approved), send_email: Boolean(input.sendEmail), external_id: pending.externalId }
         }, null, source));
       } catch (error) {
         try { booking = await bookingByExternalId(pending.externalId, source, action.apiBaseUrl); } catch {}
@@ -1047,8 +1046,11 @@ if (!window.marina) {
       if (!booking?.serverId) throw Object.assign(new Error("Crearea a reușit fără un ID de rezervare verificabil."), { code: "invalid_create_response", unknownOutcome: true, temporary: true });
     }
     pending.serverId = booking?.serverId || createdServerId;
+    if (payload.note_saved === true) pending.noteSaved = true;
     await savePendingCreate(source, pending);
-    await request(`/bookings/${pending.serverId}/note`, { method: "POST", body: { note: String(input.note || "") }, idempotencyKey: pending.noteKey, expectedApiBaseUrl: action.apiBaseUrl }, null, source);
+    if (pending.noteSaved !== true) {
+      await request(`/bookings/${pending.serverId}/note`, { method: "POST", body: { note: String(input.note || "") }, idempotencyKey: pending.noteKey, expectedApiBaseUrl: action.apiBaseUrl }, null, source);
+    }
     await cacheCreatedBooking(source, pending.serverId, { ...input, externalId: pending.externalId });
     await removePendingCreate(source, pending.externalId);
     await refreshAfterMutation(source, currentRange);
@@ -1095,16 +1097,19 @@ if (!window.marina) {
       const source = SOURCES.has(input?.source) ? input.source : currentSource;
       const stayTimes = source === "camping" ? { checkIn: "14:00:01", checkOut: "12:00:02" } : {};
       const dates = window.BookingCalendar.toStayDateTimes(input.dates, stayTimes);
-      const apiBaseUrl = normalizeBaseUrl((await allSettings())[source]?.apiBaseUrl);
-      const signature = createOperationSignature({ source, apiBaseUrl, ...input, dates });
-      const inFlight = inFlightCreates.get(signature);
+      const inFlightKey = JSON.stringify(canonicalValue({ source, ...input, dates }));
+      const inFlight = inFlightCreates.get(inFlightKey);
       if (inFlight) return inFlight;
-      const unresolved = ((await allActionHistory())[source] || []).find((item) => item.type === "create" && item.signature === signature && ["queued", "sending", "failed", "conflict", "needs_attention"].includes(item.status));
-      if (unresolved) throw previousMutationError(unresolved);
-      const operation = trackedMutation({ source, key: `create:${source}`, type: "create", resourceId: input.resourceId, payload: input, apiBaseUrl, signature }, (action) => executeCreateAction(source, action));
-      inFlightCreates.set(signature, operation);
+      const operation = (async () => {
+        const apiBaseUrl = normalizeBaseUrl((await allSettings())[source]?.apiBaseUrl);
+        const signature = createOperationSignature({ source, apiBaseUrl, ...input, dates });
+        const unresolved = ((await allActionHistory())[source] || []).find((item) => item.type === "create" && item.signature === signature && ["queued", "sending", "failed", "conflict", "needs_attention"].includes(item.status));
+        if (unresolved) throw previousMutationError(unresolved);
+        return trackedMutation({ source, key: `create:${source}`, type: "create", resourceId: input.resourceId, payload: input, apiBaseUrl, signature }, (action) => executeCreateAction(source, action));
+      })();
+      inFlightCreates.set(inFlightKey, operation);
       try { return await operation; }
-      finally { if (inFlightCreates.get(signature) === operation) inFlightCreates.delete(signature); }
+      finally { if (inFlightCreates.get(inFlightKey) === operation) inFlightCreates.delete(inFlightKey); }
     },
     async editBooking(id, patch) {
       const source = SOURCES.has(patch?.source) ? patch.source : currentSource;

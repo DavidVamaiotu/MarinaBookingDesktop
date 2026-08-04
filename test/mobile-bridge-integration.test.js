@@ -147,7 +147,7 @@ test("mobile create saves its note and refreshes through the expected API contra
     requests.push({ url, options });
     if (url.includes("/by-external-id/")) return jsonResponse(created ? { booking: { booking_id: 77, resource_id: 4, dates: [{ date: "2026-07-12" }, { date: "2026-07-13" }] } } : { code: "rest_booking_not_found" }, created ? 200 : 404);
     if (url.endsWith("/availability")) return jsonResponse({ available: true });
-    if (url.endsWith("/bookings") && options.method === "POST") { created = true; return jsonResponse({ booking_id: 77 }); }
+    if (url.endsWith("/bookings") && options.method === "POST") { created = true; return jsonResponse({ booking_id: 77, note_saved: true, note: "Sosire târzie" }); }
     if (url.endsWith("/bookings/77/note")) return jsonResponse({ ok: true });
     if (url.endsWith("/resources")) return jsonResponse({ resources: [{ id: 4, title: "Camera 4", active: true }] });
     if (url.includes("/bookings?")) return jsonResponse({ bookings: [{ booking_id: 77, resource_id: 4, dates: [{ date: "2026-07-12" }, { date: "2026-07-13" }], form_data: { name: { value: "Ana", type: "text" } }, note: "Sosire târzie" }] });
@@ -159,11 +159,11 @@ test("mobile create saves its note and refreshes through the expected API contra
   const create = requests.find((item) => item.url.endsWith("/bookings") && item.options.method === "POST");
   const note = requests.find((item) => item.url.endsWith("/bookings/77/note"));
   assert.ok(create);
-  assert.ok(note);
-  assert.equal(JSON.parse(note.options.body).note, "Sosire târzie");
+  assert.equal(note, undefined);
+  assert.equal(JSON.parse(create.options.body).note, "Sosire târzie");
   assert.equal(JSON.parse(create.options.body).external_id, create.options.headers["Idempotency-Key"]);
   assert.equal(requests.filter((item) => item.url.endsWith("/bookings") && item.options.method === "POST").length, 1);
-  assert.equal(requests.filter((item) => item.url.endsWith("/availability")).length, 1);
+  assert.equal(requests.filter((item) => item.url.endsWith("/availability")).length, 0);
   assert.equal(results[0].localId, "server:77");
   assert.equal(results[1].serverId, 77);
   assert.ok(harness.classNames.has("is-mobile-app"));
@@ -195,7 +195,7 @@ test("mobile create clears Booking Calendar's automatic zero-price remark when n
     requests.push({ url, options });
     if (url.includes("/by-external-id/")) return jsonResponse(created ? { booking: { booking_id: 78, resource_id: 4, dates: [{ date: "2026-07-14" }] } } : { code: "rest_booking_not_found" }, created ? 200 : 404);
     if (url.endsWith("/availability")) return jsonResponse({ available: true });
-    if (url.endsWith("/bookings") && options.method === "POST") { created = true; return jsonResponse({ booking_id: 78 }); }
+    if (url.endsWith("/bookings") && options.method === "POST") { created = true; return jsonResponse({ booking_id: 78, note_saved: true, note: "" }); }
     if (url.endsWith("/bookings/78/note")) return jsonResponse({ ok: true });
     if (url.endsWith("/resources")) return jsonResponse({ resources: [{ id: 4, title: "Camera 4", active: true }] });
     if (url.includes("/bookings?")) return jsonResponse({ bookings: [{ booking_id: 78, resource_id: 4, dates: [{ date: "2026-07-14" }], note: "" }] });
@@ -203,9 +203,10 @@ test("mobile create clears Booking Calendar's automatic zero-price remark when n
   });
 
   await harness.marina.createBooking({ resourceId: 4, dates: ["2026-07-14"], formData: { name: { value: "Ana", type: "text" } }, bookingFormType: "standard", note: "" });
+  const create = requests.find((item) => item.url.endsWith("/bookings") && item.options.method === "POST");
   const note = requests.find((item) => item.url.endsWith("/bookings/78/note"));
-  assert.ok(note);
-  assert.equal(JSON.parse(note.options.body).note, "");
+  assert.equal(JSON.parse(create.options.body).note, "");
+  assert.equal(note, undefined);
 });
 
 test("mobile persists deposit and payment-email commands in dependency order", async () => {

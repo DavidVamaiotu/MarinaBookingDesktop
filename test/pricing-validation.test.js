@@ -51,6 +51,14 @@ test("create submit keeps the form reference across the final asynchronous quote
   assert.doesNotMatch(renderer, /formBookingInput\(event\.currentTarget\)/);
 });
 
+test("new reservation pricing prepares a reusable full quote before submit", () => {
+  const renderer = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  assert.match(renderer, /mode: editingDetails\(\) \? "fast" : "full"/);
+  assert.match(renderer, /createQuote\.mode === "full"/);
+  assert.match(renderer, /createQuoteKey === key/);
+  assert.match(renderer, /Date\.now\(\) - createQuoteConfirmedAt < 15_000/);
+});
+
 test("new reservations generate their note from the confirmed quote", () => {
   const renderer = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
   assert.match(renderer, /return PricingNote\.format\(quote\)/);

@@ -150,6 +150,57 @@ test("desktop mutations wait for WordPress before changing the local booking", a
   database.close();
 });
 
+test("desktop create skips the follow-up note request when WordPress saved it atomically", async () => {
+  const database = new BookingDatabase(":memory:");
+  const calls = { create: 0, note: 0, availability: 0 };
+  const api = {
+    availability: async () => { calls.availability += 1; return { available: true }; },
+    create: async (payload) => {
+      calls.create += 1;
+      assert.equal(payload.note, "Cost total: 300 RON");
+      return { payload: { booking_id: 801, note_saved: true, note: payload.note } };
+    },
+    note: async () => { calls.note += 1; return { payload: { updated: true } }; }
+  };
+  const queue = new CommandQueue({ database, api });
+  const service = new BookingService({ database, api, queue, vault: { hasPassword: () => true } });
+  queue.start();
+  const saving = service.create({ resourceId: 4, dates: ["2026-07-20", "2026-07-21"], formData: { name: { value: "Fixture", type: "text" } }, note: "Cost total: 300 RON" });
+  await queue.pump();
+  const booking = await saving;
+  assert.equal(booking.serverId, 801);
+  assert.equal(booking.note, "Cost total: 300 RON");
+  assert.deepEqual(calls, { create: 1, note: 0, availability: 0 });
+  queue.stop();
+  database.close();
+});
+
+test("desktop create retains the legacy note request for older API plugins", async () => {
+  const database = new BookingDatabase(":memory:");
+  const calls = { create: 0, note: 0 };
+  const api = {
+    create: async () => { calls.create += 1; return { payload: { booking_id: 802 } }; },
+    note: async (_id, payload) => {
+      calls.note += 1;
+      assert.equal(payload.note, "Legacy note");
+      return { payload: { booking_id: 802, note: payload.note } };
+    }
+  };
+  const queue = new CommandQueue({ database, api });
+  const service = new BookingService({ database, api, queue, vault: { hasPassword: () => true } });
+  queue.start();
+  const saving = service.create({ resourceId: 4, dates: ["2026-07-20", "2026-07-21"], formData: { name: { value: "Fixture", type: "text" } }, note: "Legacy note" });
+  await queue.pump();
+  await new Promise((resolve) => setImmediate(resolve));
+  await queue.pump();
+  const booking = await saving;
+  assert.equal(booking.serverId, 802);
+  assert.equal(booking.note, "Legacy note");
+  assert.deepEqual(calls, { create: 1, note: 1 });
+  queue.stop();
+  database.close();
+});
+
 test("booking service maps renderer quote fields to the native price API contract", async () => {
   const database = new BookingDatabase(":memory:");
   const queue = new EventEmitter();

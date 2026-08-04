@@ -12,7 +12,7 @@
 
   function toItem(booking) {
     const lastName = field(booking, "lastName");
-    const name = lastName || field(booking, "firstName") || field(booking, "email") || `Booking ${booking.serverId || "local"}`;
+    const name = lastName || field(booking, "firstName") || field(booking, "email") || `Rezervare ${booking.serverId || "local"}`;
     return {
       key: booking.localId,
       serverId: booking.serverId,
@@ -31,7 +31,7 @@
     const items = bookings.filter((booking) => includeTrashed || !booking.trashed).map(toItem);
     return resources.map((resource) => ({
       id: Number(resource.id),
-      title: resource.title || `Resource ${resource.id}`,
+      title: resource.title || `Spațiul ${resource.id}`,
       subtitle: "",
       items: items.filter((item) => item.resourceId === Number(resource.id))
     }));

@@ -23,6 +23,12 @@ test("timeline reservation labels show only the WordPress last name", () => {
   assert.equal(item.title, "Popescu");
 });
 
+test("timeline fallback labels are Romanian", () => {
+  const lanes = mapState([{ id: 4 }], [{ localId: "local:1", serverId: 12, resourceId: 4, dates: ["2026-07-20"], formData: {}, status: "pending" }]);
+  assert.equal(lanes[0].title, "Spațiul 4");
+  assert.equal(lanes[0].items[0].title, "Rezervare 12");
+});
+
 test("timeline display rows can differ from the original API resource", () => {
   const booking = { localId: "server:12", serverId: 12, resourceId: 27, timelineResourceId: 2, dates: ["2026-07-20"], formData: {}, status: "pending" };
   const item = toItem(booking);

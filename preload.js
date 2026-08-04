@@ -7,7 +7,7 @@ const sources = new Set(["rooms", "camping"]);
 let currentSource = "rooms";
 
 function setSource(source) {
-  if (!sources.has(source)) throw new TypeError("Invalid booking source.");
+  if (!sources.has(source)) throw new TypeError("Sursa rezervărilor este invalidă.");
   currentSource = source;
 }
 

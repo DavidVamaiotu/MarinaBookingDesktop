@@ -418,7 +418,7 @@ class BookingDatabase {
       // hides it until WordPress returns a server id.
       const booking = this.writeBooking({ ...input, note: "", localId, externalId, status: input.approved ? "approved" : "pending", trashed: false, syncState: "queued" });
       this.setOverlay(localId, null, booking);
-      const commandId = this.enqueue("create", localId, input.resourceId, { resource_id: input.resourceId, dates: input.apiDates || this.bookingDateTimes(input.dates), form_data: input.formData, booking_form_type: input.bookingFormType || "", approved: Boolean(input.approved), send_email: Boolean(input.sendEmail), external_id: externalId }, { noCoalesce: true, idempotencyKey: externalId, commandId: externalId });
+      const commandId = this.enqueue("create", localId, input.resourceId, { resource_id: input.resourceId, dates: input.apiDates || this.bookingDateTimes(input.dates), form_data: input.formData, booking_form_type: input.bookingFormType || "", note: String(input.note || ""), approved: Boolean(input.approved), send_email: Boolean(input.sendEmail), external_id: externalId }, { noCoalesce: true, idempotencyKey: externalId, commandId: externalId });
       return { booking, commandId };
     });
   }
@@ -563,7 +563,10 @@ class BookingDatabase {
       const duplicate = this.db.prepare("SELECT local_id FROM bookings WHERE server_id=? AND local_id<>?").get(Number(serverId), command.booking_local_id);
       if (duplicate) this.db.prepare("DELETE FROM bookings WHERE local_id=? AND sync_state='synced'").run(duplicate.local_id);
       this.db.prepare("UPDATE bookings SET server_id=?,sync_state='synced',updated_at=? WHERE local_id=?").run(Number(serverId), now(), command.booking_local_id);
-      const confirmed = this.bookingRow(command.booking_local_id);
+      let confirmed = this.bookingRow(command.booking_local_id);
+      if (result?.note_saved === true) {
+        confirmed = this.writeBooking({ ...confirmed, note: result.note ?? command.payload.note ?? "", syncState: "synced" }, { preserveOverlay: true });
+      }
       this.db.prepare("UPDATE optimistic_overlays SET base_json=?,overlay_json=?,updated_at=? WHERE booking_local_id=?").run(JSON.stringify(confirmed), JSON.stringify(confirmed), now(), command.booking_local_id);
       this.markCommand(command.id, "synced", { result });
       this.refreshBookingSyncState(command.booking_local_id);

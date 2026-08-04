@@ -88,11 +88,11 @@ class CommandQueue extends EventEmitter {
       const booking = command.booking_local_id ? this.database.bookingRow(command.booking_local_id) : null;
       if (!booking) throw Object.assign(new Error("Rezervarea locală nu mai există."), { code: "local_booking_missing", permanent: true });
       let response;
-      if (!this.skipAvailabilityChecks && (command.type === "create" || (command.type === "edit" && command.payload.availability_dates?.length))) {
-        const dates = command.type === "create" ? command.payload.dates : command.payload.availability_dates;
+      if (!this.skipAvailabilityChecks && command.type === "edit" && command.payload.availability_dates?.length) {
+        const dates = command.payload.availability_dates;
         const availability = await this.api.availability(command.resource_id, dates, {
           expectedApiBaseUrl: command.api_base_url,
-          excludeBookingId: command.type === "edit" ? booking.serverId : undefined
+          excludeBookingId: booking.serverId
         });
         if (availability.available === false) throw Object.assign(new Error("Datele solicitate nu mai sunt disponibile."), { code: "availability_conflict", conflict: true, permanent: true, payload: availability });
       }

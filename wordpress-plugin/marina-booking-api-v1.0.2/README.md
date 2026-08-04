@@ -1,4 +1,10 @@
-# Marina Booking API v1.0.8
+# Marina Booking API v1.0.9
+
+## New in v1.0.9: faster reservation creation
+
+- Validates availability and creates the booking within one REST request while preserving Booking Calendar's native final availability check.
+- Accepts an optional `note` during creation and reports `note_saved` so current clients can avoid a second note request while older clients remain compatible.
+- Adds a non-unique `sync_gid` lookup index for faster idempotent create reconciliation.
 
 ## New in v1.0.8: safe idempotent validation errors
 

@@ -146,10 +146,13 @@ class BookingService extends EventEmitter {
 
   async create(input) {
     const result = this.database.optimisticCreate(input);
-    const note = input.note ? this.database.optimisticUpdate(result.booking.localId, { note: input.note }, "note") : null;
     this.emitState();
-    await this.queue.waitForAttempt(result.commandId);
-    if (note) await this.queue.waitForAttempt(note.commandId);
+    const created = await this.queue.waitForAttempt(result.commandId);
+    if (created?.note_saved !== true) {
+      const note = this.database.optimisticUpdate(result.booking.localId, { note: input.note || "" }, "note");
+      this.emitState();
+      await this.queue.waitForAttempt(note.commandId);
+    }
     this.emitState();
     return this.database.bookingRow(result.booking.localId);
   }

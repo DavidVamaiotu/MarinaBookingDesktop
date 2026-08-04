@@ -10,7 +10,7 @@ const { CommandQueue } = require("./src/main/command-queue");
 const { BookingService } = require("./src/main/booking-service");
 const validate = require("./src/main/validation");
 
-app.setName("Marina Booking Desktop");
+app.setName("Marina Booking");
 if (process.platform === "linux") app.commandLine.appendSwitch("password-store", "gnome-libsecret");
 
 let window = null;
@@ -28,7 +28,7 @@ function configureAutoUpdater() {
     const { response } = await dialog.showMessageBox(window, {
       type: "info",
       title: "Actualizare pregătită",
-      message: `Marina Booking Desktop ${version} a fost descărcată.`,
+      message: `Marina Booking ${version} a fost descărcată.`,
       detail: "Repornește aplicația pentru a instala actualizarea.",
       buttons: ["Repornește și instalează", "Mai târziu"],
       defaultId: 0,

@@ -65,7 +65,7 @@
 
   function rangeAvailability(occupancy, start, end) {
     if (!DATE.test(start || "") || !DATE.test(end || "") || start >= end) {
-      return { available: false, reason: "Select an arrival and a later departure date." };
+      return { available: false, reason: "Selectați data sosirii și o dată de plecare ulterioară." };
     }
     const dates = dateRange(start, end);
     for (let index = 0; index < dates.length; index += 1) {

@@ -10,13 +10,15 @@ const BookingFields = require("../src/shared/booking-fields");
 const { normalizeFormData } = require("../src/shared/form-data");
 
 function input(name = "Guest") {
-  return { resourceId: 4, dates: ["2026-07-20", "2026-07-21"], formData: { name: { value: name, type: "text" } }, bookingFormType: "standard", approved: false };
+  return { resourceId: 4, dates: ["2026-07-20", "2026-07-21"], formData: { name: { value: name, type: "text" } }, bookingFormType: "standard", note: "Cost total: 300 RON", approved: false };
 }
 
 test("create commands preserve the Booking Calendar form used for native pricing", () => {
   const db = new BookingDatabase(":memory:");
   db.optimisticCreate(input());
-  assert.equal(db.readyCommands()[0].payload.booking_form_type, "standard");
+  const payload = db.readyCommands()[0].payload;
+  assert.equal(payload.booking_form_type, "standard");
+  assert.equal(payload.note, "Cost total: 300 RON");
   db.close();
 });
 

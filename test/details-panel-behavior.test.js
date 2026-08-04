@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const PricingNote = require("../src/shared/pricing-note");
+const ErrorMessages = require("../src/shared/error-messages");
 
 const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
 
@@ -24,6 +25,7 @@ function functionSource(name) {
 }
 
 function evaluate(names, expression, sandbox = {}) {
+  sandbox.ErrorMessages ||= ErrorMessages;
   const source = names.map(functionSource).join("\n");
   return vm.runInNewContext(`${source}\n${expression}`, sandbox, { filename: "app.behavior.js" });
 }

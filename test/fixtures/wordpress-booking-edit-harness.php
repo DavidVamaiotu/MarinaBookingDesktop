@@ -70,6 +70,8 @@ function initial_state() {
 $GLOBALS['harness_state'] = initial_state();
 $GLOBALS['harness_move_fails'] = false;
 $GLOBALS['harness_corrupt_dates'] = false;
+$GLOBALS['harness_vendor_lookup_calls'] = 0;
+$GLOBALS['harness_booking_lookup_sql'] = '';
 
 class Fake_WPDB {
 	public $prefix = 'wp_';
@@ -87,6 +89,10 @@ class Fake_WPDB {
 		return $sql;
 	}
 	public function get_var() { return 0; }
+	public function get_row( $sql ) {
+		$GLOBALS['harness_booking_lookup_sql'] = $sql;
+		return $GLOBALS['harness_state']['booking'];
+	}
 	public function get_results() {
 		return array_map(
 			function( $date ) { return array( 'booking_date' => $date, 'approved' => 1, 'type_id' => null ); },
@@ -101,7 +107,10 @@ class Fake_WPDB {
 
 $GLOBALS['wpdb'] = new Fake_WPDB();
 
-function wpbc_api_get_booking_by_id() { return $GLOBALS['harness_state']['booking']; }
+function wpbc_api_get_booking_by_id() {
+	$GLOBALS['harness_vendor_lookup_calls']++;
+	return $GLOBALS['harness_state']['booking'];
+}
 
 function wpbc_api_booking_add_new( $dates, $form_data, $resource_id, $params ) {
 	if ( 31 !== (int) $resource_id || '15:00' !== $form_data['starttime']['value'] || '12:00' !== $form_data['endtime']['value'] ) {
@@ -165,6 +174,9 @@ harness_assert( false === strpos( $GLOBALS['harness_state']['booking']['form'], 
 harness_assert( false !== strpos( $GLOBALS['harness_state']['booking']['form'], '^starttime32^15:00' ), 'Start time was not preserved.' );
 harness_assert( false !== strpos( $GLOBALS['harness_state']['booking']['form'], '^endtime32^12:00' ), 'End time was not preserved.' );
 harness_assert( 'Client kept this note: 450 RON' === $GLOBALS['harness_state']['booking']['remark'], 'Submitted note was changed.' );
+harness_assert( false !== strpos( $GLOBALS['harness_booking_lookup_sql'], 'FROM wp_booking ' ), 'Mutation lookup did not use the booking table.' );
+harness_assert( false === strpos( $GLOBALS['harness_booking_lookup_sql'], 'bookingdates' ), 'Mutation lookup unexpectedly joined booking dates.' );
+harness_assert( 0 === $GLOBALS['harness_vendor_lookup_calls'], 'Mutation lookup unexpectedly invoked Booking Calendar form parsing.' );
 
 $GLOBALS['harness_state'] = initial_state();
 $before = $GLOBALS['harness_state'];

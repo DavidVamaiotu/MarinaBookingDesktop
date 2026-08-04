@@ -36,13 +36,21 @@ test("unknown create reconciles by external_id and does not create twice", async
   db.close();
 });
 
-test("availability rejection becomes a visible conflict", async () => {
+test("create relies on the native server save for the final availability conflict", async () => {
   const db = new BookingDatabase(":memory:");
   const created = create(db);
-  const queue = new CommandQueue({ database: db, api: { availability: async () => ({ available: false }) } });
+  let availabilityCalls = 0;
+  const queue = new CommandQueue({
+    database: db,
+    api: {
+      availability: async () => { availabilityCalls += 1; return { available: false }; },
+      create: async () => { throw Object.assign(new Error("Datele solicitate nu mai sunt disponibile."), { code: "marina_booking_api_availability_conflict", status: 409, conflict: true }); }
+    }
+  });
   await queue.execute(db.readyCommands()[0]);
+  assert.equal(availabilityCalls, 0);
   assert.equal(db.commandRows()[0].status, "conflict");
-  assert.equal(db.commandRows()[0].errorCode, "availability_conflict");
+  assert.equal(db.commandRows()[0].errorCode, "marina_booking_api_availability_conflict");
   assert.equal(db.bookingRow(created.booking.localId).syncState, "conflict");
   assert.equal(db.listBookings("2026-07-20", "2026-07-20").length, 0);
   db.close();
@@ -172,7 +180,7 @@ test("an idempotency reservation still in progress remains queued instead of bec
 test("authentication failure pauses the queue and credential recovery requeues it", async () => {
   const db = new BookingDatabase(":memory:");
   create(db);
-  const api = { availability: async () => { throw Object.assign(new Error("Forbidden"), { auth: true, code: "forbidden" }); } };
+  const api = { create: async () => { throw Object.assign(new Error("Forbidden"), { auth: true, code: "forbidden" }); } };
   const queue = new CommandQueue({ database: db, api });
   await queue.execute(db.readyCommands()[0]);
   assert.equal(queue.authPaused, true);

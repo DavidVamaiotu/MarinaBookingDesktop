@@ -162,6 +162,7 @@ let quoteRequestId = 0;
 let quoteState = "stale";
 let createQuote = null;
 let createQuoteKey = "";
+let createQuoteConfirmedAt = 0;
 let createCalendarMonth = monthStart(todayIso());
 let createSelectionStart = "";
 let createSelectionEnd = "";
@@ -237,8 +238,8 @@ function escapeHtml(value) { return String(value ?? "").replace(/[&<>'"]/g, (cha
 
 const DISPLAY_STATUS = { approved: "aprobată", pending: "în așteptare", synced: "sincronizat", queued: "în coadă", sending: "se trimite", failed: "eșuată", conflict: "conflict", needs_attention: "necesită atenție", cancelled: "anulată" };
 const DISPLAY_COMMAND = { create: "creare", edit: "editare", status: "status", note: "notă", trash: "gunoi", deposit_update: "actualizare avans", payment_request: "email de plată" };
-function displayStatus(value) { return DISPLAY_STATUS[value] || value; }
-function displayCommand(value) { return DISPLAY_COMMAND[value] || value; }
+function displayStatus(value) { return DISPLAY_STATUS[value] || "necunoscut"; }
+function displayCommand(value) { return DISPLAY_COMMAND[value] || "acțiune"; }
 
 const CALENDAR_WEEKDAYS = ["LU", "MA", "MI", "JO", "VI", "SÂ", "DU"];
 
@@ -591,10 +592,7 @@ const observedCommandStatuses = new Map();
 const observedCommandWorkspaces = new Set();
 
 function shortErrorMessage(error) {
-  const message = String(error?.message || error || "Acțiunea nu a putut fi finalizată.")
-    .replace(/^Error:\s*/i, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  const message = ErrorMessages.message(error);
   return message.length > 150 ? `${message.slice(0, 147)}…` : message;
 }
 
@@ -1224,11 +1222,12 @@ function renderCommands() {
     const retryable = ["failed", "conflict", "needs_attention"].includes(command.status);
     const client = commandClientLabel(command);
     const change = commandChangeSummary(command);
+    const errorMessage = command.errorMessage ? ErrorMessages.message(command.errorMessage) : "";
     const bookingActions = command.bookingLocalId && window.marina.platform !== "android"
       ? `<button class="secondary compact" data-revert-booking="${escapeHtml(command.bookingLocalId)}" type="button">Revino la local</button><button class="secondary compact" data-open-booking="${escapeHtml(command.bookingLocalId)}" type="button">Deschide detaliile</button>`
       : command.bookingLocalId && ["deposit_update", "payment_request"].includes(command.type)
         ? `<button class="secondary compact" data-revert-booking="${escapeHtml(command.bookingLocalId)}" type="button">Anulează și reîncarcă</button>` : "";
-    return `<div class="command"><div><strong>${escapeHtml(displayCommand(command.type))}</strong> <span>${escapeHtml(displayStatus(command.status))}</span></div><small>${new Date(command.updatedAt).toLocaleString("ro-RO")}</small><div class="command-details"><div><strong>Client:</strong> ${escapeHtml(client)}</div><div><strong>Schimbare:</strong> ${escapeHtml(change)}</div></div>${command.errorMessage ? `<div class="error"><strong>Eroare:</strong> ${escapeHtml(command.errorMessage)}</div>` : ""}${!compact && retryable ? `<button class="secondary compact" data-retry-command="${command.id}" type="button">Reîncearcă</button>${bookingActions}` : ""}</div>`;
+    return `<div class="command"><div><strong>${escapeHtml(displayCommand(command.type))}</strong> <span>${escapeHtml(displayStatus(command.status))}</span></div><small>${new Date(command.updatedAt).toLocaleString("ro-RO")}</small><div class="command-details"><div><strong>Client:</strong> ${escapeHtml(client)}</div><div><strong>Schimbare:</strong> ${escapeHtml(change)}</div></div>${errorMessage ? `<div class="error"><strong>Eroare:</strong> ${escapeHtml(errorMessage)}</div>` : ""}${!compact && retryable ? `<button class="secondary compact" data-retry-command="${command.id}" type="button">Reîncearcă</button>${bookingActions}` : ""}</div>`;
   };
   $("#commandList").innerHTML = state.commands.map((command) => commandHtml(command)).join("") || '<div class="availability">Nu există comenzi.</div>';
   $("#clearQueueIssues").hidden = failedCount === 0;
@@ -1765,7 +1764,7 @@ async function fetchCreateQuote(requestId, key, { mode = "fast", forceFresh = fa
     if (source !== activeWorkspace || requestId !== quoteRequestId || key !== currentQuoteKey(form)) return false;
     if (result.valid === false) {
       quoteState = "error";
-      setCreatePricing(result.message || "Intervalul nu poate fi tarifat.", "unavailable");
+      setCreatePricing(ErrorMessages.message(result.message, "Intervalul nu poate fi tarifat."), "unavailable");
       renderCreateSummary();
       return false;
     }
@@ -1774,6 +1773,7 @@ async function fetchCreateQuote(requestId, key, { mode = "fast", forceFresh = fa
     quoteState = "fresh";
     createQuote = { ...displayedQuote, valid: true };
     createQuoteKey = key;
+    createQuoteConfirmedAt = Date.now();
     setCreatePricing(mode === "full" ? "Preț complet confirmat de Booking Calendar." : "Preț calculat de Booking Calendar.", "available");
     if (!editingDetails()) renderQuoteBreakdown();
     renderCreateSummary();
@@ -1784,7 +1784,7 @@ async function fetchCreateQuote(requestId, key, { mode = "fast", forceFresh = fa
     const unavailable = error?.code === "rest_no_route"
       ? "Actualizați Marina Booking API la versiunea 1.0.4 pentru calcularea prețului."
       : error?.permanent && error?.message
-        ? error.message
+        ? ErrorMessages.message(error, "Prețul nou nu a putut fi calculat.")
       : "Prețul nou nu a putut fi calculat. Ultimul preț afișat este vechi.";
     setCreatePricing(unavailable, "unavailable");
     renderCreateSummary();
@@ -1811,13 +1811,21 @@ function schedulePriceCheck() {
   setCreatePricing("Prețul afișat trebuie actualizat…");
   renderCreateSummary();
   const source = activeWorkspace;
-  quoteTimer = setTimeout(() => void fetchCreateQuote(requestId, key, { mode: "fast", source }), 300);
+  quoteTimer = setTimeout(() => void fetchCreateQuote(requestId, key, { mode: editingDetails() ? "fast" : "full", source }), 300);
 }
 
 async function refreshPriceNow({ forceFresh = true } = {}) {
   clearTimeout(quoteTimer);
   const key = currentQuoteKey(calendarForm());
   if (!key) return false;
+  if (
+    !editingDetails()
+    && quoteState === "fresh"
+    && createQuote?.valid
+    && createQuote.mode === "full"
+    && createQuoteKey === key
+    && Date.now() - createQuoteConfirmedAt < 15_000
+  ) return true;
   const requestId = ++quoteRequestId;
   return fetchCreateQuote(requestId, key, { mode: "full", forceFresh, source: activeWorkspace });
 }
@@ -1992,7 +2000,7 @@ function populateBookingMenu(booking) {
       <span class="booking-id-badge">${escapeHtml(String(booking.serverId || "local"))}</span>
       <span class="booking-status-badge ${approved ? "approved" : "pending"}">${statusLabel}</span>
       <span class="booking-resource-badge">${escapeHtml(resource?.title || `Spațiul ${booking.resourceId}`)}</span>
-      ${booking.syncState !== "synced" ? `<span class="booking-sync-badge">${escapeHtml(booking.syncState)}</span>` : ""}
+      ${booking.syncState !== "synced" ? `<span class="booking-sync-badge">${escapeHtml(displayStatus(booking.syncState))}</span>` : ""}
     </div>
     <div class="booking-menu-facts">
       <span><strong>Prenume:</strong>${escapeHtml(firstName)}</span>
@@ -2010,7 +2018,7 @@ function populateBookingMenu(booking) {
       <b>→</b>
       <span>${escapeHtml(formatMenuDate(booking.dates[booking.dates.length - 1]))} <small>12:00</small></span>
     </div>
-    ${updated ? `<p class="booking-menu-updated">Updated: ${escapeHtml(updated)}</p>` : ""}
+    ${updated ? `<p class="booking-menu-updated">Actualizat: ${escapeHtml(updated)}</p>` : ""}
   `;
 }
 
@@ -2203,7 +2211,7 @@ async function refreshPaymentSnapshot(booking) {
     const snapshot = await window.marina.getPayment(booking.localId, { source: activeWorkspace });
     paymentSnapshots.set(key, snapshot);
   } catch (error) {
-    paymentSnapshotErrors.set(key, error.message || "Plata nu a putut fi verificată pe server.");
+    paymentSnapshotErrors.set(key, ErrorMessages.message(error, "Plata nu a putut fi verificată pe server."));
   } finally {
     paymentSnapshotLoading.delete(key);
     const current = bookingById(key);
@@ -2255,9 +2263,9 @@ function renderPaymentSection(booking, reset = false) {
   const verifiedForEmail = pendingDeposit || (authoritativePaymentAvailable && snapshot.email_available !== false);
   $("#sendPaymentRequest").disabled = !booking.serverId || booking.trashed || !email || !verifiedForEmail || Boolean(emailCommand);
   let status = "";
-  if (depositCommand && ["failed", "conflict", "needs_attention"].includes(depositCommand.status)) status = `${depositCommand.errorMessage || `Avans: ${displayStatus(depositCommand.status)}.`}${emailCommand ? " Emailul rămâne blocat până la rezolvare." : ""}`;
-  else if (emailCommand) status = emailCommand.status === "queued" ? "Email programat; va fi trimis după salvarea avansului." : emailCommand.errorMessage || `Email: ${displayStatus(emailCommand.status)}.`;
-  else if (depositCommand) status = depositCommand.status === "queued" ? "Avans salvat în coadă." : depositCommand.errorMessage || `Avans: ${displayStatus(depositCommand.status)}.`;
+  if (depositCommand && ["failed", "conflict", "needs_attention"].includes(depositCommand.status)) status = `${depositCommand.errorMessage ? ErrorMessages.message(depositCommand.errorMessage) : `Avans: ${displayStatus(depositCommand.status)}.`}${emailCommand ? " Emailul rămâne blocat până la rezolvare." : ""}`;
+  else if (emailCommand) status = emailCommand.status === "queued" ? "Email programat; va fi trimis după salvarea avansului." : emailCommand.errorMessage ? ErrorMessages.message(emailCommand.errorMessage) : `Email: ${displayStatus(emailCommand.status)}.`;
+  else if (depositCommand) status = depositCommand.status === "queued" ? "Avans salvat în coadă." : depositCommand.errorMessage ? ErrorMessages.message(depositCommand.errorMessage) : `Avans: ${displayStatus(depositCommand.status)}.`;
   else if (paymentSnapshotLoading.has(booking.localId)) status = "Se verifică suma nativă de plată…";
   else if (snapshotError) status = `Suma nativă nu a putut fi verificată: ${snapshotError}`;
   else if (!authoritativePaymentAvailable) status = "WordPress nu a returnat un cost și un avans valide.";
@@ -2923,7 +2931,7 @@ $("#testConnection").addEventListener("click", async () => {
     const result = await runApiAction("testConnection", { apiBaseUrl: form.elements.apiBaseUrl.value, username: form.elements.username.value, password: form.elements.password.value || undefined, timezone: form.elements.timezone.value, source });
     output.textContent = `Conectat. Au fost găsite ${result.resources} spații.`;
   }
-  catch (error) { output.textContent = error.message || String(error); }
+  catch (error) { output.textContent = ErrorMessages.message(error); }
 });
 
 $("#clearCredentials").addEventListener("click", async () => {

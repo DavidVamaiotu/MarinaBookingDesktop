@@ -68,7 +68,7 @@ test("queue details cover simple and payment actions, while the renderer labels 
   assert.equal(commandChangeSummary({ type: "trash", payload: { trash: false } }), "Restabilire din gunoi");
   assert.equal(commandChangeSummary({ type: "deposit_update", payload: { deposit: 200, total: 800 } }), "Avans: 200 RON din 800 RON");
   assert.equal(commandChangeSummary({ type: "payment_request", payload: { reason: "ABCDEF", start_date: "2026-08-01", end_date: "2026-08-03" } }), "Trimite emailul de plată (ABCDEF) · Perioadă: 2026-08-01 – 2026-08-03");
-  assert.match(appSource, /<strong>Eroare:<\/strong> \$\{escapeHtml\(command\.errorMessage\)\}/);
+  assert.match(appSource, /<strong>Eroare:<\/strong> \$\{escapeHtml\(errorMessage\)\}/);
   assert.match(appSource, /<strong>Client:<\/strong> \$\{escapeHtml\(client\)\}/);
   assert.match(appSource, /<strong>Schimbare:<\/strong> \$\{escapeHtml\(change\)\}/);
 });

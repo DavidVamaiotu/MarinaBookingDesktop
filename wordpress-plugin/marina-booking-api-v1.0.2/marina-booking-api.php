@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Marina Booking API
  * Description: Secure REST API bridge for Booking Calendar / Booking Calendar Pro.
- * Version: 1.0.8
+ * Version: 1.0.9
  * Requires Plugins: booking
  * Author: Marina Park
  * Requires at least: 6.5
@@ -16,8 +16,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 final class Marina_Booking_API {
 
-	const VERSION   = '1.0.8';
-	const SCHEMA_VERSION = '1.0.2';
+	const VERSION   = '1.0.9';
+	const SCHEMA_VERSION = '1.0.3';
 	const IDEMPOTENCY_TABLE_SUFFIX = 'marina_booking_api_idempotency';
 	const NAMESPACE = 'marina-booking/v1';
 	const CAPABILITY = 'manage_marina_booking_api';
@@ -113,7 +113,30 @@ final class Marina_Booking_API {
 			KEY marina_booking_id (booking_id)
 		) {$charset_collate};";
 		dbDelta( $sql );
+		self::ensure_booking_external_id_index();
 		update_option( 'marina_booking_api_schema_version', self::SCHEMA_VERSION, false );
+	}
+
+	/**
+	 * Add a non-unique lookup index without changing Booking Calendar's data or
+	 * duplicate external-ID handling. A prefix covers every API external ID.
+	 *
+	 * @return void
+	 */
+	private static function ensure_booking_external_id_index() {
+		global $wpdb;
+		$table = $wpdb->prefix . 'booking';
+		$index = $wpdb->get_var( "SHOW INDEX FROM {$table} WHERE Key_name = 'marina_sync_gid_booking'" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		if ( null !== $index ) {
+			return;
+		}
+
+		// Refuse a table-copying migration on production. If the database engine
+		// cannot build this index online, creation remains correct but unindexed.
+		$created = $wpdb->query( "ALTER TABLE {$table} ADD INDEX marina_sync_gid_booking (sync_gid(191), booking_id), ALGORITHM=INPLACE, LOCK=NONE" ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		if ( false === $created ) {
+			error_log( 'Marina Booking API: could not add the optional external-ID lookup index.' );
+		}
 	}
 
 	/**
@@ -340,12 +363,17 @@ final class Marina_Booking_API {
 		$is_price_preview = ( '/' . self::NAMESPACE . '/prices/calculate' === untrailingslashit( (string) $request->get_route() ) );
 		$limit    = ( $is_write && ! $is_price_preview ) ? 60 : 300;
 		$window   = 300;
-		$bucket   = (int) floor( time() / $window );
+		$now      = time();
+		$bucket   = (int) floor( $now / $window );
 		$key      = 'mbapi_rl_' . md5( get_current_user_id() . '|' . $request->get_route() . '|' . $bucket );
 		$count    = (int) get_transient( $key );
 
 		if ( $count >= $limit ) {
-			return new WP_Error( 'marina_booking_api_rate_limited', 'Too many requests. Please try again shortly.', array( 'status' => 429 ) );
+			return new WP_Error(
+				'marina_booking_api_rate_limited',
+				'Too many requests. Please try again shortly.',
+				array( 'status' => 429, 'retry_after' => max( 1, ( ( $bucket + 1 ) * $window ) - $now ) )
+			);
 		}
 
 		set_transient( $key, $count + 1, $window );
@@ -1022,6 +1050,13 @@ final class Marina_Booking_API {
 		if ( is_wp_error( $dates ) ) {
 			return $dates;
 		}
+		$is_booked = self::dates_are_booked( $dates, $resource_id );
+		if ( is_wp_error( $is_booked ) ) {
+			return $is_booked;
+		}
+		if ( $is_booked ) {
+			return new WP_Error( 'marina_booking_api_availability_conflict', 'The requested dates are no longer available.', array( 'status' => 409 ) );
+		}
 
 		$form_data = self::normalize_form_data( isset( $payload['form_data'] ) ? $payload['form_data'] : array() );
 		if ( is_wp_error( $form_data ) ) {
@@ -1038,8 +1073,20 @@ final class Marina_Booking_API {
 			return new WP_Error( 'marina_booking_api_create_failed', $booking_id->get_error_message(), array( 'status' => 422 ) );
 		}
 
+		$note_saved = true;
+		$note       = '';
+		if ( array_key_exists( 'note', $payload ) ) {
+			$note = self::sanitize_text( $payload['note'], 4000 );
+			global $wpdb;
+			$table       = $wpdb->prefix . 'booking';
+			$note_saved  = false !== $wpdb->update( $table, array( 'remark' => $note ), array( 'booking_id' => (int) $booking_id ), array( '%s' ), array( '%d' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+			if ( $note_saved ) {
+				self::audit( 'booking_note_updated', (int) $booking_id );
+			}
+		}
+
 		self::audit( 'booking_created', (int) $booking_id );
-		return self::response( array( 'booking_id' => (int) $booking_id ), 201 );
+		return self::response( array( 'booking_id' => (int) $booking_id, 'note_saved' => $note_saved, 'note' => $note ), 201 );
 	}
 
 	/**
@@ -1067,7 +1114,7 @@ final class Marina_Booking_API {
 	 */
 	private static function update_booking_operation( WP_REST_Request $request ) {
 		$booking_id = absint( $request['id'] );
-		$existing   = self::raw_booking( $booking_id );
+		$existing   = self::mutation_booking( $booking_id );
 		if ( is_wp_error( $existing ) ) {
 			return $existing;
 		}
@@ -1157,7 +1204,7 @@ final class Marina_Booking_API {
 			return new WP_Error( 'marina_booking_api_note_failed', 'Could not preserve the booking note while editing.', array( 'status' => 500 ) );
 		}
 
-		$saved = self::raw_booking( $booking_id );
+		$saved = self::mutation_booking( $booking_id );
 		$saved_form = ! is_wp_error( $saved ) && isset( $saved['form'] ) ? (string) $saved['form'] : '';
 		$name_suffix_ok = ! isset( $form_data['name'] ) || preg_match( '/(?:^|~)[^^~]*\^name' . preg_quote( (string) $resource_id, '/' ) . '\^/', $saved_form );
 		if (
@@ -1305,7 +1352,7 @@ final class Marina_Booking_API {
 	 */
 	private static function set_booking_status_operation( WP_REST_Request $request ) {
 		$booking_id = absint( $request['id'] );
-		$booking    = self::raw_booking( $booking_id );
+		$booking    = self::mutation_booking( $booking_id );
 		if ( is_wp_error( $booking ) ) {
 			return $booking;
 		}
@@ -1380,7 +1427,7 @@ final class Marina_Booking_API {
 	 */
 	private static function set_booking_note_operation( WP_REST_Request $request ) {
 		$booking_id = absint( $request['id'] );
-		$booking    = self::raw_booking( $booking_id );
+		$booking    = self::mutation_booking( $booking_id );
 		if ( is_wp_error( $booking ) ) {
 			return $booking;
 		}
@@ -1417,7 +1464,7 @@ final class Marina_Booking_API {
 
 	private static function set_booking_deposit_operation( WP_REST_Request $request ) {
 		$booking_id = absint( $request['id'] );
-		$booking    = self::raw_booking( $booking_id );
+		$booking    = self::mutation_booking( $booking_id );
 		if ( is_wp_error( $booking ) ) {
 			return $booking;
 		}
@@ -1454,7 +1501,7 @@ final class Marina_Booking_API {
 			return new WP_Error( 'marina_booking_api_deposit_failed', 'Could not update the booking deposit and note.', array( 'status' => 500 ) );
 		}
 		if ( 0 === $updated ) {
-			$latest = self::raw_booking( $booking_id );
+			$latest = self::mutation_booking( $booking_id );
 			$same_result = ! is_wp_error( $latest ) && isset( $latest['remark'], $latest['cost'] ) && hash_equals( $note, (string) $latest['remark'] ) && abs( (float) $latest['cost'] - $deposit ) < 0.005;
 			if ( ! $same_result ) {
 				$wpdb->query( 'ROLLBACK' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
@@ -1539,7 +1586,7 @@ final class Marina_Booking_API {
 
 	private static function send_booking_payment_request_operation( WP_REST_Request $request ) {
 		$booking_id = absint( $request['id'] );
-		$booking    = self::raw_booking( $booking_id );
+		$booking    = self::mutation_booking( $booking_id );
 		if ( is_wp_error( $booking ) ) {
 			return $booking;
 		}
@@ -1675,7 +1722,7 @@ final class Marina_Booking_API {
 	 */
 	private static function set_booking_trash_operation( WP_REST_Request $request ) {
 		$booking_id = absint( $request['id'] );
-		$booking    = self::raw_booking( $booking_id );
+		$booking    = self::mutation_booking( $booking_id );
 		if ( is_wp_error( $booking ) ) {
 			return $booking;
 		}
@@ -2221,6 +2268,28 @@ final class Marina_Booking_API {
 		}
 
 		$booking = wpbc_api_get_booking_by_id( $booking_id );
+		if ( empty( $booking ) || empty( $booking['booking_id'] ) ) {
+			return new WP_Error( 'marina_booking_api_booking_not_found', 'Booking not found.', array( 'status' => 404 ) );
+		}
+		return $booking;
+	}
+
+	/**
+	 * Read the booking-table row needed by mutation handlers without invoking
+	 * Booking Calendar's joined date lookup and form-data parser. Selecting the
+	 * complete row preserves compatibility with vendor-added booking columns.
+	 *
+	 * @param int $booking_id Booking ID.
+	 * @return array|WP_Error
+	 */
+	private static function mutation_booking( $booking_id ) {
+		if ( $booking_id < 1 ) {
+			return new WP_Error( 'marina_booking_api_booking_not_found', 'Booking not found.', array( 'status' => 404 ) );
+		}
+
+		global $wpdb;
+		$table   = $wpdb->prefix . 'booking';
+		$booking = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table} WHERE booking_id = %d LIMIT 1", $booking_id ), ARRAY_A ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		if ( empty( $booking ) || empty( $booking['booking_id'] ) ) {
 			return new WP_Error( 'marina_booking_api_booking_not_found', 'Booking not found.', array( 'status' => 404 ) );
 		}

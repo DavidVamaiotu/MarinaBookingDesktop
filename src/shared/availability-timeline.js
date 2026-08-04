@@ -10,7 +10,7 @@
 
   function monthStart(value) {
     const date = value instanceof Date ? value : new Date(`${String(value).slice(0, 10)}T00:00:00Z`);
-    if (Number.isNaN(date.getTime())) throw new TypeError("Invalid availability month");
+    if (Number.isNaN(date.getTime())) throw new TypeError("Luna disponibilității nu este validă.");
     return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
   }
 
@@ -20,7 +20,7 @@
 
   function parseDate(value, label) {
     const date = value instanceof Date ? new Date(value) : new Date(`${String(value).slice(0, 10)}T00:00:00Z`);
-    if (Number.isNaN(date.getTime())) throw new TypeError(`Invalid availability ${label}`);
+    if (Number.isNaN(date.getTime())) throw new TypeError(`Data disponibilității ${label} nu este validă.`);
     date.setUTCHours(0, 0, 0, 0);
     return date;
   }
@@ -28,7 +28,7 @@
   function buildRange(resources, bookings, startValue, endValue) {
     const start = parseDate(startValue, "start");
     const end = parseDate(endValue, "end");
-    if (end < start) throw new RangeError("Availability end must not be before start");
+    if (end < start) throw new RangeError("Data de sfârșit a disponibilității nu poate fi înaintea datei de început.");
     const dates = BookingCalendar.dateRange(iso(start), iso(end)).map((date) => {
       const parsed = new Date(`${date}T00:00:00Z`);
       return { date, day: parsed.getUTCDate(), weekday: parsed.getUTCDay() };
