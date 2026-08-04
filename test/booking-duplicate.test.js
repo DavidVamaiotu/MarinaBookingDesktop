@@ -50,6 +50,19 @@ test("duplicate input rejects the original or an inactive resource", () => {
   assert.throws(() => BookingFields.duplicateBookingInput(booking, { id: 8, active: false }), { code: "invalid_target_resource" });
 });
 
+test("camping duplicate input can reuse a parent resource for WordPress child assignment", () => {
+  const booking = { resourceId: 1, dates: ["2026-08-10"], formData: { name1: { value: "Ana", type: "text" } } };
+  const input = BookingFields.duplicateBookingInput(
+    booking,
+    { id: 1, active: true, defaultForm: "standard" },
+    { allowSameResource: true }
+  );
+
+  assert.equal(input.resourceId, 1);
+  assert.equal(input.bookingFormType, "standard");
+  assert.equal(input.formData.name.value, "Ana");
+});
+
 test("desktop duplicate persistence keeps the draft hidden and leaves the source row unchanged", () => {
   const database = new BookingDatabase(":memory:");
   database.writeBooking({
@@ -81,14 +94,15 @@ test("desktop duplicate persistence keeps the draft hidden and leaves the source
   database.close();
 });
 
-test("duplicate UI uses the existing create path and excludes the source resource", () => {
+test("duplicate UI uses camping parent resources and preserves the rooms exclusion", () => {
   const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
   const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
   assert.match(html, /id="bookingMenuDuplicate"/);
   assert.match(html, /id="bookingMenuTrash"[\s\S]*id="bookingMenuDuplicate"[\s\S]*id="bookingPaymentMenuToggle"/);
   assert.match(html, /<dialog id="duplicateDialog"/);
+  assert.match(app, /activeWorkspace === "camping"\s*\?\s*campingParentResources\(\)/);
   assert.match(app, /resource\.active !== false && Number\(resource\.id\) !== Number\(booking\.resourceId\)/);
-  assert.match(app, /BookingFields\.duplicateBookingInput\(booking, resource\)/);
+  assert.match(app, /BookingFields\.duplicateBookingInput\(booking, resource, \{ allowSameResource: source === "camping" \}\)/);
   assert.match(app, /runApiAction\("createBooking", input\)/);
   assert.doesNotMatch(app, /runApiAction\("editBooking",[^\n]*duplicate/);
 });

@@ -124,7 +124,7 @@
     return prepared;
   }
 
-  function duplicateBookingInput(booking, targetResource) {
+  function duplicateBookingInput(booking, targetResource, { allowSameResource = false } = {}) {
     const sourceResourceId = Number(booking?.resourceId);
     const targetResourceId = Number(targetResource?.id);
     if (!Number.isInteger(sourceResourceId) || sourceResourceId <= 0) {
@@ -133,7 +133,7 @@
     if (!Number.isInteger(targetResourceId) || targetResourceId <= 0 || targetResource?.active === false) {
       throw Object.assign(new TypeError("Selectați un spațiu activ pentru duplicare."), { code: "invalid_target_resource", permanent: true });
     }
-    if (sourceResourceId === targetResourceId) {
+    if (!allowSameResource && sourceResourceId === targetResourceId) {
       throw Object.assign(new TypeError("Rezervarea duplicată trebuie alocată unui alt spațiu."), { code: "duplicate_same_resource", permanent: true });
     }
     const dates = Array.isArray(booking?.dates) ? booking.dates.map((date) => String(date)) : [];

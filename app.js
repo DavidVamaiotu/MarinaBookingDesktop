@@ -1697,7 +1697,9 @@ function openCreate({ resourceId, date } = {}) {
 
 function openDuplicate(booking) {
   cancelDrag();
-  const resources = state.resources.filter((resource) => resource.active !== false && Number(resource.id) !== Number(booking.resourceId));
+  const resources = activeWorkspace === "camping"
+    ? campingParentResources()
+    : state.resources.filter((resource) => resource.active !== false && Number(resource.id) !== Number(booking.resourceId));
   if (!resources.length) {
     showError(new Error("Nu există un alt spațiu activ pentru această rezervare."));
     return;
@@ -2761,10 +2763,13 @@ $("#duplicateForm").addEventListener("submit", async (event) => {
     duplicateDialog.close();
     return;
   }
-  const resource = resourceById(event.currentTarget.elements.resourceId.value);
+  const resourceId = Number(event.currentTarget.elements.resourceId.value);
+  const resource = source === "camping"
+    ? campingParentResources().find((candidate) => Number(candidate.id) === resourceId)
+    : resourceById(resourceId);
   let input;
   try {
-    input = { ...BookingFields.duplicateBookingInput(booking, resource), source };
+    input = { ...BookingFields.duplicateBookingInput(booking, resource, { allowSameResource: source === "camping" }), source };
   } catch (error) {
     showError(error);
     return;
