@@ -456,9 +456,8 @@ final class Marina_Booking_API {
 			}
 		}
 
-		// wpbc_api_is_dates_booked() expects a time component for its first and
-		// last values, even for all-day bookings. Keep create/edit inputs ergonomic
-		// while supplying the exact format the upstream helper requires.
+		// Booking Calendar's native availability helper expects a time component
+		// for its first and last values, even for all-day bookings.
 		$is_booked = self::dates_are_booked( $dates, $resource_id, $exclude_booking_id );
 		if ( is_wp_error( $is_booked ) ) {
 			return $is_booked;
@@ -484,11 +483,8 @@ final class Marina_Booking_API {
 	 */
 	private static function dates_are_booked( $dates, $resource_id, $exclude_booking_id = 0 ) {
 		$booking_dates = self::dates_for_availability( $dates );
-		if ( ! $exclude_booking_id ) {
-			return wpbc_api_is_dates_booked( $booking_dates, $resource_id, array( 'is_use_booking_recurrent_time' => false ) );
-		}
 		if ( ! function_exists( 'wpbc__where_to_save_booking' ) || ! function_exists( 'wpbc_transform__24_hours_his__in__seconds' ) ) {
-			return new WP_Error( 'marina_booking_api_availability_unavailable', 'Booking Calendar cannot perform an edit-safe availability check.', array( 'status' => 503 ) );
+			return new WP_Error( 'marina_booking_api_availability_unavailable', 'Booking Calendar cannot perform a capacity-aware availability check.', array( 'status' => 503 ) );
 		}
 
 		$dates_only = array_map(
@@ -513,7 +509,7 @@ final class Marina_Booking_API {
 				'time_as_seconds_arr'           => $times,
 				'how_many_items_to_book'        => 1,
 				'request_uri'                   => $request_uri,
-				'as_single_resource'            => true,
+				'as_single_resource'            => false,
 				'is_use_booking_recurrent_time' => false,
 			)
 		);
@@ -1049,13 +1045,6 @@ final class Marina_Booking_API {
 		$dates = self::normalize_dates( isset( $payload['dates'] ) ? $payload['dates'] : array() );
 		if ( is_wp_error( $dates ) ) {
 			return $dates;
-		}
-		$is_booked = self::dates_are_booked( $dates, $resource_id );
-		if ( is_wp_error( $is_booked ) ) {
-			return $is_booked;
-		}
-		if ( $is_booked ) {
-			return new WP_Error( 'marina_booking_api_availability_conflict', 'The requested dates are no longer available.', array( 'status' => 409 ) );
 		}
 
 		$form_data = self::normalize_form_data( isset( $payload['form_data'] ) ? $payload['form_data'] : array() );

@@ -78,8 +78,7 @@ test("create keeps native availability authoritative and bundles note persistenc
   const start = source.indexOf("private static function create_booking_operation");
   const end = source.indexOf("\n\tpublic static function update_booking", start);
   const createSource = source.slice(start, end);
-  assert.match(createSource, /self::dates_are_booked\( \$dates, \$resource_id \)/);
-  assert.match(createSource, /marina_booking_api_availability_conflict/);
+  assert.doesNotMatch(createSource, /self::dates_are_booked/);
   assert.match(createSource, /wpbc_api_booking_add_new\( \$dates, \$form_data, \$resource_id, \$params \)/);
   assert.match(createSource, /array_key_exists\( 'note', \$payload \)/);
   assert.match(createSource, /array\( 'remark' => \$note \)/);
