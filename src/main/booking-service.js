@@ -113,6 +113,16 @@ class BookingService extends EventEmitter {
         this.database.replaceResources(resources);
         for (const booking of bookings) this.database.upsertRemoteBooking(booking);
         const returnedIds = new Set(bookings.map((booking) => booking.serverId));
+        const missing = this.database.missingRemoteRangeBookings(range.start, range.end, returnedIds);
+        for (const local of missing) {
+          try {
+            const confirmed = await this.api.booking(local.serverId, { expectedApiBaseUrl });
+            this.database.upsertRemoteBooking(confirmed);
+            returnedIds.add(local.serverId);
+          } catch (error) {
+            if (error.status !== 404) throw error;
+          }
+        }
         this.database.reconcileRemoteRange(range.start, range.end, returnedIds);
         const pending = this.database.listBookings(range.start, range.end).filter((booking) => booking.serverId && booking.syncState !== "synced" && !returnedIds.has(booking.serverId));
         for (const local of pending) {

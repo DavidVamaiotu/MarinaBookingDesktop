@@ -330,7 +330,7 @@ class BookingDatabase {
     this.db.prepare("DELETE FROM loaded_ranges").run();
   }
 
-  reconcileRemoteRange(start, end, returnedServerIds) {
+  missingRemoteRangeBookings(start, end, returnedServerIds) {
     const returned = new Set([...returnedServerIds].map(Number));
     const cached = this.db.prepare(`SELECT DISTINCT b.local_id AS localId,b.server_id AS serverId
       FROM bookings b
@@ -338,7 +338,11 @@ class BookingDatabase {
       WHERE d.booking_date BETWEEN ? AND ?
         AND b.server_id IS NOT NULL
         AND b.sync_state='synced'`).all(start, end);
-    const remove = cached.filter((booking) => !returned.has(Number(booking.serverId)));
+    return cached.filter((booking) => !returned.has(Number(booking.serverId)));
+  }
+
+  reconcileRemoteRange(start, end, returnedServerIds) {
+    const remove = this.missingRemoteRangeBookings(start, end, returnedServerIds);
     if (!remove.length) return 0;
     const statement = this.db.prepare("DELETE FROM bookings WHERE local_id=? AND sync_state='synced'");
     this.transaction(() => remove.forEach((booking) => statement.run(booking.localId)));

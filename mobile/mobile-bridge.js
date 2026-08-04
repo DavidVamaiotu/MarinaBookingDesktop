@@ -1051,9 +1051,9 @@ if (!window.marina) {
     if (pending.noteSaved !== true) {
       await request(`/bookings/${pending.serverId}/note`, { method: "POST", body: { note: String(input.note || "") }, idempotencyKey: pending.noteKey, expectedApiBaseUrl: action.apiBaseUrl }, null, source);
     }
+    await refreshAfterMutation(source, currentRange);
     await cacheCreatedBooking(source, pending.serverId, { ...input, externalId: pending.externalId });
     await removePendingCreate(source, pending.externalId);
-    await refreshAfterMutation(source, currentRange);
     return {
       localId: `server:${pending.serverId}`,
       serverId: Number(pending.serverId),

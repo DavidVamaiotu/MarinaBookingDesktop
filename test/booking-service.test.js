@@ -48,6 +48,29 @@ test("a forced refresh explicitly verifies the cached range again", async () => 
   database.close();
 });
 
+test("a range omission cannot remove a booking that still exists by id", async () => {
+  const database = new BookingDatabase(":memory:");
+  database.upsertRemoteBooking({ serverId: 77, resourceId: 4, dates: ["2026-07-20"], formData: { name: { value: "Fixture", type: "text" } }, status: "approved", note: "" });
+  const queue = new EventEmitter();
+  queue.start = () => {};
+  queue.stop = () => {};
+  queue.schedule = () => {};
+  let bookingReads = 0;
+  const api = {
+    async resources() { return [{ id: 4, title: "Room 4" }]; },
+    async bookings() { return []; },
+    async booking(serverId) {
+      bookingReads += 1;
+      return { serverId, resourceId: 4, dates: ["2026-07-20"], formData: { name: { value: "Fixture", type: "text" } }, status: "approved", note: "" };
+    }
+  };
+  const service = new BookingService({ database, api, queue, vault: { hasPassword: () => true } });
+  const state = await service.refresh({ start: "2026-07-01", end: "2026-07-31" }, { force: true });
+  assert.equal(bookingReads, 1);
+  assert.equal(state.bookings.some((booking) => booking.serverId === 77), true);
+  database.close();
+});
+
 test("an older range refresh cannot emit state for a newer visible range", async () => {
   const database = new BookingDatabase(":memory:");
   const queue = new EventEmitter();
