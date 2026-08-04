@@ -149,6 +149,7 @@ test("mobile create saves its note and refreshes through the expected API contra
     if (url.endsWith("/availability")) return jsonResponse({ available: true });
     if (url.endsWith("/bookings") && options.method === "POST") { created = true; return jsonResponse({ booking_id: 77, note_saved: true, note: "Sosire târzie" }); }
     if (url.endsWith("/bookings/77/note")) return jsonResponse({ ok: true });
+    if (url.endsWith("/bookings/77")) return jsonResponse({ booking: { booking_id: 77, resource_id: 4, dates: [{ date: "2026-07-12" }, { date: "2026-07-13" }], form_data: { name: { value: "Ana", type: "text" } }, note: "Sosire târzie" } });
     if (url.endsWith("/resources")) return jsonResponse({ resources: [{ id: 4, title: "Camera 4", active: true }] });
     if (url.includes("/bookings?")) return jsonResponse({ bookings: [] });
     throw new Error(`Unexpected synthetic request: ${url}`);
@@ -166,7 +167,9 @@ test("mobile create saves its note and refreshes through the expected API contra
   assert.equal(requests.filter((item) => item.url.endsWith("/availability")).length, 0);
   assert.equal(results[0].localId, "server:77");
   assert.equal(results[1].serverId, 77);
-  const state = await harness.marina.bootstrap({ start: "2026-07-01", end: "2026-07-31" });
+  let state = await harness.marina.bootstrap({ start: "2026-07-01", end: "2026-07-31" });
+  assert.equal(state.bookings.some((booking) => booking.serverId === 77), true);
+  state = await harness.marina.refresh({ start: "2026-07-01", end: "2026-07-31" });
   assert.equal(state.bookings.some((booking) => booking.serverId === 77), true);
   assert.ok(harness.classNames.has("is-mobile-app"));
 });

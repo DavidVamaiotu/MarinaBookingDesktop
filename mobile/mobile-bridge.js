@@ -532,6 +532,28 @@ if (!window.marina) {
         const resources = resourcePayload.resources.map(normalizeResource);
         const resourceIds = new Set(resources.map((resource) => resource.id));
         if (resourceIds.size !== resources.length) throw Object.assign(new Error("Endpoint-ul resurselor a returnat înregistrări duplicate."), { code: "invalid_resource_record", permanent: true, payload: resourcePayload });
+        const previous = (await allCache())[source]?.bookings || [];
+        const returnedIds = new Set(bookings.map((booking) => Number(booking.serverId)));
+        const missing = previous.filter((booking) =>
+          booking.serverId
+          && !returnedIds.has(Number(booking.serverId))
+          && (booking.dates || []).some((date) => date >= range.start && date <= range.end)
+        );
+        for (const local of missing) {
+          try {
+            const { payload } = await request(`/bookings/${local.serverId}`, { expectedApiBaseUrl }, null, source);
+            const confirmed = normalizeBooking(payload?.booking || payload);
+            if (!confirmed.serverId || !confirmed.resourceId || !confirmed.dates.length) {
+              throw Object.assign(new Error("Verificarea rezervării a returnat o înregistrare incompletă."), { code: "invalid_booking_record", permanent: true, payload });
+            }
+            if (confirmed.dates.some((date) => date >= range.start && date <= range.end)) {
+              bookings.push(confirmed);
+              returnedIds.add(Number(confirmed.serverId));
+            }
+          } catch (error) {
+            if (error.status !== 404) throw error;
+          }
+        }
         const scoped = scopeMobileData(resources, bookings, source);
         const actions = (await allActionHistory())[source] || [];
         for (const action of actions) {
