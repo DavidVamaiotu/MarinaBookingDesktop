@@ -579,11 +579,15 @@ const API_ACTION_MESSAGES = Object.freeze({
   retryCommand: ["Se reîncearcă acțiunea…", "Acțiunea a fost retrimisă."],
   revertBooking: ["Se anulează modificarea locală…", "Modificarea locală a fost anulată."],
   clearFailedCommands: ["Se curăță acțiunile eșuate…", "Acțiunile eșuate au fost curățate."],
+  pauseQueue: ["Se opresc acțiunile…", "Acțiunile au fost oprite."],
+  resumeQueue: ["Se repornesc acțiunile…", "Acțiunile au fost repornite."],
   testConnection: ["Se testează conexiunea API…", "Conexiunea API funcționează."]
 });
 const DESKTOP_QUEUE_MESSAGES = Object.freeze({
   revertBooking: "Modificarea locală a fost anulată.",
-  clearFailedCommands: "Acțiunile eșuate au fost curățate."
+  clearFailedCommands: "Acțiunile eșuate au fost curățate.",
+  pauseQueue: "Acțiunile au fost oprite.",
+  resumeQueue: "Acțiunile au fost repornite."
 });
 const apiToastErrors = new WeakSet();
 const toastTimers = new WeakMap();
@@ -682,15 +686,21 @@ function resourceById(resourceId) { return state.resources.find((resource) => Nu
 
 function updateSyncUi() {
   const info = state.diagnostics || {};
+  const queueControlsAvailable = window.marina.platform !== "android";
+  $("#pauseQueue").hidden = !queueControlsAvailable || Boolean(info.queuePaused);
+  $("#resumeQueue").hidden = !queueControlsAvailable || !info.queuePaused;
   const campingSetupRequired = activeWorkspace === "camping" && !state.settings?.credentialsConfigured;
   const endpointChanged = state.commands.some((command) => command.errorCode === "endpoint_changed");
   const indicator = $("#syncIndicator");
   indicator.className = `sync-indicator ${info.failed ? "attention" : info.online ? "online" : "offline"}`;
   indicator.dataset.issueCount = info.failed || "";
-  $("#syncText").textContent = endpointChanged ? "Verifică adresa API" : info.authPaused ? "Verifică datele de acces" : info.online ? "Conectat" : "Deconectat";
+  $("#syncText").textContent = info.queuePaused ? "Acțiuni oprite" : endpointChanged ? "Verifică adresa API" : info.authPaused ? "Verifică datele de acces" : info.online ? "Conectat" : "Deconectat";
   $("#syncCounts").textContent = `${info.queued || 0} în coadă · ${info.failed || 0} cu probleme`;
   const banner = $("#banner");
-  if (campingSetupRequired) {
+  if (info.queuePaused) {
+    banner.hidden = false;
+    banner.textContent = "Acțiunile automate sunt oprite. Comenzile rămân local până când apeși Repornește acțiunile.";
+  } else if (campingSetupRequired) {
     banner.hidden = false;
     banner.textContent = "Camping este pregătit local. Instalează Marina Booking API pe camping.marinapark.ro și configurează parola de aplicație în Setări pentru sincronizare.";
   } else if (endpointChanged) {
@@ -1233,7 +1243,7 @@ function renderCommands() {
   $("#clearQueueIssues").hidden = failedCount === 0;
   const info = state.diagnostics;
   const cache = info.cache?.loadedAt ? `${info.cache.startDate}–${info.cache.endDate}, verificat ${new Date(info.cache.loadedAt).toLocaleString("ro-RO")}` : "nu este încărcat";
-  $("#diagnosticSummary").textContent = `Conectare: ${info.online ? "da" : "nu"} · în coadă: ${info.queued || 0} · probleme: ${info.failed || 0} · ultima sincronizare: ${info.lastSuccessfulSync ? new Date(info.lastSuccessfulSync).toLocaleString("ro-RO") : "niciodată"} · cache: ${cache}`;
+  $("#diagnosticSummary").textContent = `Acțiuni automate: ${info.queuePaused ? "oprite" : "pornite"} · conectare: ${info.online ? "da" : "nu"} · în coadă: ${info.queued || 0} · probleme: ${info.failed || 0} · ultima sincronizare: ${info.lastSuccessfulSync ? new Date(info.lastSuccessfulSync).toLocaleString("ro-RO") : "niciodată"} · cache: ${cache}`;
   if (selectedBookingId && $("#bookingCommands")) $("#bookingCommands").innerHTML = state.commands.filter((command) => command.bookingLocalId === selectedBookingId).map((command) => commandHtml(command, true)).join("") || "Nu există comenzi locale.";
 }
 
@@ -2849,6 +2859,19 @@ $("#bookingMenuTrash").addEventListener("click", async () => {
 });
 
 $("#syncIndicator").addEventListener("click", () => { diagnostics.hidden = false; });
+$("#pauseQueue").addEventListener("click", async () => {
+  if (!confirm("Oprești toate acțiunile automate? Comanda aflată deja în curs nu mai poate fi retrasă, dar nu vor începe alte trimiteri.")) return;
+  await runExclusive(`pause-queue:${activeWorkspace}`, [$("#pauseQueue")], async () => {
+    try { await runApiAction("pauseQueue"); }
+    catch (error) { showError(error); }
+  });
+});
+$("#resumeQueue").addEventListener("click", async () => {
+  await runExclusive(`resume-queue:${activeWorkspace}`, [$("#resumeQueue")], async () => {
+    try { await runApiAction("resumeQueue"); }
+    catch (error) { showError(error); }
+  });
+});
 $("#clearQueueIssues").addEventListener("click", async () => {
   if (!confirm("Anulezi modificările locale eșuate și comenzile care depind de ele? Rezervările vor reveni la ultima stare cunoscută de pe server.")) return;
   const button = $("#clearQueueIssues");

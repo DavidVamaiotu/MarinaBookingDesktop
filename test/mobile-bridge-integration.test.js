@@ -278,6 +278,33 @@ test("mobile persists a zero deposit in WordPress and keeps the full balance", a
   assert.equal(state.bookings[0].note, "Cost total: 100 RON, Depozit: 0 RON, Rest: 100 RON");
 });
 
+test("mobile payment email stops after exactly two attempts with the same key", async () => {
+  const keys = [];
+  const booking = { booking_id: 91, resource_id: 4, dates: [{ date: "2026-07-20" }, { date: "2026-07-21" }], form_data: { email: { value: "client@example.com", type: "email" } }, remark: "Avans: 30, Cost: 100, Rest: 70" };
+  const harness = await configuredBridge(async (url, options = {}) => {
+    if (url.endsWith("/resources")) return jsonResponse({ resources: [{ id: 4, title: "Camera 4", active: true }] });
+    if (url.includes("/bookings?")) return jsonResponse({ bookings: [booking] });
+    if (url.endsWith("/bookings/91/payment-request")) {
+      keys.push(options.headers["Idempotency-Key"]);
+      return jsonResponse({ code: "temporary", message: "Trimitere neconfirmată.", data: { status: 503 } }, 503, { "Retry-After": "0" });
+    }
+    throw new Error(`Unexpected synthetic request: ${url}`);
+  });
+  await harness.marina.refresh({ start: "2026-07-01", end: "2026-07-31" });
+
+  await assert.rejects(
+    harness.marina.requestPayment("server:91", { reason: "aBcDeF", nights: 1, start_date: "2026-07-20", end_date: "2026-07-21" }),
+    (error) => error.code === "automatic_retry_limit_reached" && error.permanent === true
+  );
+
+  assert.equal(keys.length, 2);
+  assert.equal(keys[0], keys[1]);
+  const state = await harness.marina.bootstrap({ start: "2026-07-01", end: "2026-07-31" });
+  const command = state.commands.find((item) => item.type === "payment_request");
+  assert.equal(command.status, "needs_attention");
+  assert.equal(command.errorCode, "automatic_retry_limit_reached");
+});
+
 test("mobile blocks payment email after a failed deposit and clear restores the server note", async () => {
   let paymentRequests = 0;
   const booking = { booking_id: 188, resource_id: 4, dates: [{ date: "2026-07-20" }, { date: "2026-07-21" }], form_data: { email: { value: "client@example.com", type: "email" } }, remark: "Avans: 30, Cost: 100, Rest: 70" };
@@ -589,14 +616,15 @@ test("mobile same-client actions never start after an earlier action fails", asy
   assert.equal(statusCalls, 1);
 });
 
-test("mobile retries an older queued action before sending a newer same-client change", async () => {
+test("mobile stops a failed action after two attempts and blocks a newer same-client change", async () => {
   const notes = [];
   let olderAttempts = 0;
   const harness = await configuredBridge(async (url, options = {}) => {
     if (url.endsWith("/bookings/55/note") && options.method === "POST") {
       const note = JSON.parse(options.body).note;
       notes.push(note);
-      if (note === "Older" && ++olderAttempts <= 3) {
+      if (note === "Older") {
+        olderAttempts += 1;
         return jsonResponse({ code: "temporary", message: "Încearcă din nou.", data: { status: 503 } }, 503, { "Retry-After": "0.05" });
       }
       return jsonResponse({ ok: true });
@@ -612,19 +640,15 @@ test("mobile retries an older queued action before sending a newer same-client c
   );
   await assert.rejects(
     harness.marina.setNote("server:55", { note: "Newer" }),
-    (error) => error.code === "confirmation_pending" && error.temporary === true && error.queued === true
+    (error) => error.code === "previous_action_failed" && error.permanent === true
   );
 
-  for (let attempt = 0; attempt < 100 && !notes.includes("Newer"); attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-
-  assert.deepEqual(notes, ["Older", "Older", "Older", "Older", "Newer"]);
+  assert.deepEqual(notes, ["Older", "Older"]);
   const state = await harness.marina.bootstrap({ start: "2026-07-01", end: "2026-07-31" });
-  const ordered = state.commands.filter((command) => ["Older", "Newer"].includes(command.payload?.note)).reverse();
-  assert.equal(ordered[1].dependsOnCommandId, ordered[0].id);
-  assert.equal(ordered[0].status, "synced");
-  assert.equal(ordered[1].status, "synced");
+  const older = state.commands.find((command) => command.payload?.note === "Older");
+  assert.equal(older.status, "needs_attention");
+  assert.equal(older.errorCode, "automatic_retry_limit_reached");
+  assert.equal(state.commands.some((command) => command.payload?.note === "Newer"), false);
 });
 
 test("mobile action history persists every successful mutation and its lifecycle", async () => {

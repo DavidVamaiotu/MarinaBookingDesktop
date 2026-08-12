@@ -91,6 +91,14 @@ function registerIpc() {
   ipcMain.handle("queue:retry", (_event, source, id) => contextFor(source).service.retry(validate.id(id, "commandId")));
   ipcMain.handle("queue:revert", (_event, source, localId) => contextFor(source).service.revert(validate.id(localId, "localId")));
   ipcMain.handle("queue:clear-failed", (_event, source) => contextFor(source).service.clearFailedCommands());
+  ipcMain.handle("queue:pause", (_event, source) => {
+    for (const queueSource of ["rooms", "camping"]) contextFor(queueSource).service.pauseQueue();
+    return contextFor(source).service.state().diagnostics;
+  });
+  ipcMain.handle("queue:resume", (_event, source) => {
+    for (const queueSource of ["rooms", "camping"]) contextFor(queueSource).service.resumeQueue();
+    return contextFor(source).service.state().diagnostics;
+  });
   ipcMain.handle("settings:get", (_event, source) => contextFor(source).service.settings());
   ipcMain.handle("settings:save", (_event, source, input) => {
     const { service, database } = contextFor(source);

@@ -18,6 +18,7 @@ if (!window.marina) {
   const PENDING_CREATES_KEY = "marina-mobile-pending-creates-v1";
   const ACTION_HISTORY_KEY = "marina-mobile-action-history-v1";
   const ACTION_HISTORY_LIMIT = 500;
+  const MAX_AUTOMATIC_ACTION_ATTEMPTS = 2;
   const PASSWORD_PREFIX = "marina-password-";
   const callbacks = new Set();
   const mutationChains = new Map();
@@ -159,6 +160,17 @@ if (!window.marina) {
     await emitCurrentState(source);
   }
 
+  function queuedFailure(action, error) {
+    const attempt = Number(action.attempts || 0) + Math.max(1, Number(error.requestAttempts) || 1);
+    const temporary = !["endpoint_changed", "queue_metadata_missing"].includes(error.code) && (error.temporary || error.rateLimited || error.unknownOutcome);
+    if (temporary && attempt < MAX_AUTOMATIC_ACTION_ATTEMPTS) return { retry: true, status: "queued", attempt };
+    if (temporary) {
+      const uncertain = error.unknownOutcome || error.code === "marina_booking_api_request_in_progress";
+      return { retry: false, status: uncertain ? "needs_attention" : "failed", attempt, limitReached: true };
+    }
+    return { retry: false, status: error.code === "endpoint_changed" ? "needs_attention" : (error.status === 409 || error.conflict ? "conflict" : "failed"), attempt, limitReached: false };
+  }
+
   async function trackedMutation({ source, key, type, bookingLocalId = null, resourceId = null, payload = {}, apiBaseUrl, idempotencyKey, editIntent = null, noteIdempotencyKey = null, signature = null }, task) {
     let queuedPredecessor = null;
     if (bookingLocalId) {
@@ -225,18 +237,17 @@ if (!window.marina) {
           });
           return result;
         } catch (error) {
-          const temporary = !["endpoint_changed", "queue_metadata_missing"].includes(error.code) && (error.temporary || error.rateLimited || error.unknownOutcome);
+          const failure = queuedFailure(action, error);
           const completedAt = new Date().toISOString();
-          const status = temporary ? "queued" : (error.code === "endpoint_changed" ? "needs_attention" : (error.status === 409 || error.conflict ? "conflict" : "failed"));
           await updateAction(source, action.id, {
-            status,
-            errorCode: error.code || "request_failed",
-            errorMessage: error.message || "Acțiunea nu a putut fi finalizată.",
-            availableAt: temporary ? new Date(Date.now() + retryDelayMs(Number(action.attempts || 0) + 1, error.retryAfter)).toISOString() : action.availableAt,
+            status: failure.status,
+            errorCode: failure.limitReached ? "automatic_retry_limit_reached" : error.code || "request_failed",
+            errorMessage: failure.limitReached ? `${error.message || "Acțiunea nu a putut fi finalizată."} Acțiunea a fost oprită după două încercări.` : error.message || "Acțiunea nu a putut fi finalizată.",
+            availableAt: failure.retry ? new Date(Date.now() + retryDelayMs(failure.attempt, error.retryAfter)).toISOString() : action.availableAt,
             updatedAt: completedAt,
-            completedAt: temporary ? null : completedAt
+            completedAt: failure.retry ? null : completedAt
           });
-          if (temporary) scheduleActionQueue(source, retryDelayMs(Number(action.attempts || 0) + 1, error.retryAfter));
+          if (failure.retry) scheduleActionQueue(source, retryDelayMs(failure.attempt, error.retryAfter));
           throw error;
         }
       });
@@ -336,7 +347,8 @@ if (!window.marina) {
     if (options.body !== undefined) headers["Content-Type"] = "application/json";
     if (options.idempotencyKey) headers["Idempotency-Key"] = options.idempotencyKey;
     const retryable = options.retry !== false && (method === "GET" || Boolean(options.idempotencyKey) || options.readOnly === true);
-    const maxAttempts = retryable ? Math.max(1, Number(options.maxAttempts) || 3) : 1;
+    const defaultAttempts = method === "GET" || options.readOnly === true ? 3 : 2;
+    const maxAttempts = retryable ? Math.max(1, Number(options.maxAttempts) || defaultAttempts) : 1;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       let response;
       let error;
@@ -399,7 +411,10 @@ if (!window.marina) {
           error.payload = payload;
         }
       }
-      if (!retryable || !error.temporary || attempt >= maxAttempts) throw error;
+      if (!retryable || !error.temporary || attempt >= maxAttempts) {
+        error.requestAttempts = attempt;
+        throw error;
+      }
       await wait(retryDelayMs(attempt, error.retryAfter));
     }
     throw new Error("Cererea API nu a putut fi finalizată.");
@@ -945,11 +960,17 @@ if (!window.marina) {
               const completedAt = new Date().toISOString();
               await updateAction(source, action.id, { status: "synced", result: canonicalValue(response), errorCode: null, errorMessage: null, completedAt, updatedAt: completedAt });
             } catch (error) {
-              const temporary = !["endpoint_changed", "queue_metadata_missing"].includes(error.code) && (error.temporary || error.rateLimited || error.unknownOutcome);
-              const delay = retryDelayMs(Number(action.attempts || 0) + 1, error.retryAfter);
-              const status = temporary ? "queued" : (error.code === "endpoint_changed" ? "needs_attention" : (error.status === 409 || error.conflict ? "conflict" : "failed"));
-              await updateAction(source, action.id, { status, availableAt: temporary ? new Date(Date.now() + delay).toISOString() : action.availableAt, errorCode: error.code || "request_failed", errorMessage: error.message || "Acțiunea nu a putut fi finalizată.", updatedAt: new Date().toISOString() });
-              if (temporary) scheduleActionQueue(source, delay);
+              const failure = queuedFailure(action, error);
+              const delay = retryDelayMs(failure.attempt, error.retryAfter);
+              await updateAction(source, action.id, {
+                status: failure.status,
+                availableAt: failure.retry ? new Date(Date.now() + delay).toISOString() : action.availableAt,
+                errorCode: failure.limitReached ? "automatic_retry_limit_reached" : error.code || "request_failed",
+                errorMessage: failure.limitReached ? `${error.message || "Acțiunea nu a putut fi finalizată."} Acțiunea a fost oprită după două încercări.` : error.message || "Acțiunea nu a putut fi finalizată.",
+                completedAt: failure.retry ? null : new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+              });
+              if (failure.retry) scheduleActionQueue(source, delay);
               throw error;
             }
           });
