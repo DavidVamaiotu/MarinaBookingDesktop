@@ -591,7 +591,7 @@ class BookingDatabase {
 
   dismissFailedCommands() {
     return this.transaction(() => {
-      const failures = this.db.prepare("SELECT id,booking_local_id FROM commands WHERE status='failed' AND dismissed_at IS NULL ORDER BY created_at,id").all();
+      const failures = this.db.prepare("SELECT id,booking_local_id FROM commands WHERE status IN ('failed','conflict','needs_attention') AND dismissed_at IS NULL ORDER BY created_at,id").all();
       if (!failures.length) return 0;
       const bookingIds = [...new Set(failures.map((row) => row.booking_local_id).filter(Boolean))];
       const affectedCommandIds = new Set(failures.map((row) => row.id));
@@ -602,7 +602,7 @@ class BookingDatabase {
       }
       const timestamp = now();
       for (const commandId of affectedCommandIds) {
-        this.db.prepare("UPDATE commands SET status='cancelled',error_code='discarded_failed_operation',error_message='Operația eșuată și modificările locale dependente au fost anulate',dismissed_at=?,updated_at=?,completed_at=COALESCE(completed_at,?) WHERE id=?").run(timestamp, timestamp, timestamp, commandId);
+        this.db.prepare("UPDATE commands SET status='cancelled',error_code='discarded_problem_operation',error_message='Operația cu probleme și modificările locale dependente au fost anulate',dismissed_at=?,updated_at=?,completed_at=COALESCE(completed_at,?) WHERE id=?").run(timestamp, timestamp, timestamp, commandId);
         this.db.prepare("UPDATE sync_errors SET resolved_at=? WHERE resolved_at IS NULL AND command_id=?").run(timestamp, commandId);
       }
       return failures.length;

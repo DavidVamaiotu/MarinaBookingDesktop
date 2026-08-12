@@ -1226,7 +1226,7 @@ function commandChangeSummary(command) {
 }
 
 function renderCommands() {
-  const clearableStatuses = window.marina.platform === "android" ? ["failed", "conflict", "needs_attention"] : ["failed"];
+  const clearableStatuses = ["failed", "conflict", "needs_attention"];
   const failedCount = state.commands.filter((command) => clearableStatuses.includes(command.status)).length;
   const commandHtml = (command, compact = false) => {
     const retryable = ["failed", "conflict", "needs_attention"].includes(command.status);
@@ -2873,7 +2873,7 @@ $("#resumeQueue").addEventListener("click", async () => {
   });
 });
 $("#clearQueueIssues").addEventListener("click", async () => {
-  if (!confirm("Anulezi modificările locale eșuate și comenzile care depind de ele? Rezervările vor reveni la ultima stare cunoscută de pe server.")) return;
+  if (!confirm("Anulezi modificările locale cu probleme și comenzile care depind de ele? Rezervările vor reveni la ultima stare cunoscută de pe server.")) return;
   const button = $("#clearQueueIssues");
   await runExclusive(`clear-failed:${activeWorkspace}`, [button], async () => { try {
     await runApiAction("clearFailedCommands");
