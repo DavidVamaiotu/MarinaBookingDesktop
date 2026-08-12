@@ -1,5 +1,6 @@
 import { Capacitor, CapacitorHttp, registerPlugin } from "@capacitor/core";
 import { App } from "@capacitor/app";
+import { Browser } from "@capacitor/browser";
 import { Preferences } from "@capacitor/preferences";
 import { SecureStorage } from "@aparajita/capacitor-secure-storage";
 import { canonicalValue, createOperationSignature, normalizeMobilePriceQuote, retryDelayMs, scopeMobileData, serverIdFromPayload } from "../src/shared/mobile-api.js";
@@ -7,18 +8,29 @@ import { normalizeFormData } from "../src/shared/form-data.js";
 import * as BookingFields from "../src/shared/booking-fields.js";
 import * as PricingNote from "../src/shared/pricing-note.js";
 import * as PaymentRequest from "../src/shared/payment-request.js";
+import * as MarinaConfig from "../src/shared/marina-config.js";
+import * as MarinaOAuth from "../src/shared/marina-oauth.js";
+
+const marinaBuildConfig = MarinaConfig.createConfig({
+  MARINA_INTEGRATION_ENABLED: typeof __MARINA_INTEGRATION_ENABLED__ === "undefined" ? "false" : __MARINA_INTEGRATION_ENABLED__,
+  MARINA_API_BASE_URL: typeof __MARINA_API_BASE_URL__ === "undefined" ? "https://booking.husi.ro" : __MARINA_API_BASE_URL__,
+  MARINA_OAUTH_CLIENT_ID: typeof __MARINA_OAUTH_CLIENT_ID__ === "undefined" ? "" : __MARINA_OAUTH_CLIENT_ID__,
+  MARINA_OAUTH_SCOPES: typeof __MARINA_OAUTH_SCOPES__ === "undefined" ? "resources:read resources:write bookings:read bookings:write" : __MARINA_OAUTH_SCOPES__
+});
 
 const AutoUpdater = registerPlugin("AutoUpdater");
 const BackgroundQueue = registerPlugin("BackgroundQueue");
 
 if (!window.marina) {
-  const SOURCES = new Set(["rooms", "camping"]);
+  const SOURCES = new Set(["rooms", "camping", "marina"]);
   const SETTINGS_KEY = "marina-mobile-settings-v1";
   const CACHE_KEY = "marina-mobile-cache-v1";
   const PENDING_CREATES_KEY = "marina-mobile-pending-creates-v1";
   const ACTION_HISTORY_KEY = "marina-mobile-action-history-v1";
   const ACTION_HISTORY_LIMIT = 500;
+  const MAX_AUTOMATIC_ACTION_ATTEMPTS = 2;
   const PASSWORD_PREFIX = "marina-password-";
+  const MARINA_REFRESH_TOKEN_KEY = "marina-oauth-refresh-token";
   const callbacks = new Set();
   const mutationChains = new Map();
   const locallyOwnedActions = new Set();
@@ -34,6 +46,10 @@ if (!window.marina) {
   let backgroundQueueTransition = Promise.resolve();
   const MOBILE_REFRESH_INTERVAL_MS = 5 * 60_000;
   const MOBILE_RECONNECT_INTERVAL_MS = 15_000;
+
+  function assertWritableSource(source) {
+    if (source === "marina" && !marinaBuildConfig.configured) throw Object.assign(new Error("Clientul OAuth public Marina nu este configurat în această versiune a aplicației."), { code: "marina_oauth_config_incomplete", permanent: true });
+  }
 
   App.addListener("backButton", ({ canGoBack }) => {
     const event = new Event("marina:back", { cancelable: true });
@@ -83,6 +99,15 @@ if (!window.marina) {
       apiBaseUrl: "https://camping.marinapark.ro/wp-json/marina-booking/v1",
       username: "",
       timezone: "Europe/Bucharest"
+    },
+    marina: {
+      provider: "marina",
+      enabled: marinaBuildConfig.enabled,
+      configured: marinaBuildConfig.configured,
+      apiBaseUrl: marinaBuildConfig.apiBaseUrl,
+      oauthClientConfigured: Boolean(marinaBuildConfig.clientId),
+      oauthScopes: marinaBuildConfig.scopeString,
+      timezone: "Europe/Bucharest"
     }
   });
   const defaultCache = () => ({
@@ -94,10 +119,11 @@ if (!window.marina) {
       ],
       bookings: [],
       updatedAt: null
-    }
+    },
+    marina: { resources: [], bookings: [], updatedAt: null }
   });
-  const defaultPendingCreates = () => ({ rooms: [], camping: [] });
-  const defaultActionHistory = () => ({ rooms: [], camping: [] });
+  const defaultPendingCreates = () => ({ rooms: [], camping: [], marina: [] });
+  const defaultActionHistory = () => ({ rooms: [], camping: [], marina: [] });
 
   async function readJson(key, fallback) {
     const { value } = await Preferences.get({ key });
@@ -128,6 +154,131 @@ if (!window.marina) {
   async function allActionHistory() { return readJson(ACTION_HISTORY_KEY, defaultActionHistory); }
   async function passwordFor(source = currentSource) { return String(await SecureStorage.get(`${PASSWORD_PREFIX}${source}`) || ""); }
 
+  let marinaMetadata = null;
+  let marinaPending = null;
+  let marinaAccessToken = "";
+  let marinaAccessExpiresAt = 0;
+  let marinaEffectiveScopes = [...marinaBuildConfig.scopes];
+  let marinaRefreshPromise = null;
+
+  function mobilePayload(response) {
+    if (response?.data && typeof response.data === "object") return response.data;
+    try { return JSON.parse(String(response?.data || "{}")); } catch { return {}; }
+  }
+
+  async function marinaDiscover() {
+    if (marinaMetadata) return marinaMetadata;
+    const response = await CapacitorHttp.get({ url: `${marinaBuildConfig.apiBaseUrl}/.well-known/oauth-authorization-server`, headers: { Accept: "application/json" }, connectTimeout: 15000, readTimeout: 15000 });
+    const payload = mobilePayload(response);
+    if (response.status < 200 || response.status >= 300) throw Object.assign(new Error("Descoperirea OAuth Marina a eșuat."), { code: "marina_oauth_discovery_failed", status: response.status });
+    const endpoint = (value, fallback) => {
+      const url = new URL(value || fallback, `${marinaBuildConfig.apiBaseUrl}/`);
+      if (url.protocol !== "https:" || url.origin !== new URL(marinaBuildConfig.apiBaseUrl).origin) throw Object.assign(new Error("Metadatele OAuth Marina conțin un endpoint invalid."), { code: "marina_oauth_metadata_invalid" });
+      return url.toString();
+    };
+    marinaMetadata = {
+      authorizationEndpoint: endpoint(payload.authorization_endpoint, "/oauth/authorize"),
+      tokenEndpoint: endpoint(payload.token_endpoint, "/oauth/token"),
+      revocationEndpoint: endpoint(payload.revocation_endpoint, "/oauth/revoke")
+    };
+    return marinaMetadata;
+  }
+
+  async function marinaTokenRequest(values) {
+    const metadata = await marinaDiscover();
+    const response = await CapacitorHttp.post({
+      url: metadata.tokenEndpoint,
+      headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+      data: MarinaOAuth.formBody(values),
+      connectTimeout: 15000,
+      readTimeout: 15000
+    });
+    const payload = mobilePayload(response);
+    if (response.status < 200 || response.status >= 300 || !payload.access_token) throw Object.assign(new Error(payload.error_description || "Schimbul tokenului OAuth Marina a eșuat."), { code: payload.error || "marina_oauth_token_failed", auth: true, status: response.status });
+    marinaAccessToken = String(payload.access_token);
+    marinaAccessExpiresAt = Date.now() + Math.max(0, Number(payload.expires_in) || 0) * 1000;
+    if (payload.scope) marinaEffectiveScopes = String(payload.scope).split(/\s+/).filter(Boolean);
+    if (payload.refresh_token) await SecureStorage.set(MARINA_REFRESH_TOKEN_KEY, String(payload.refresh_token));
+    return marinaAccessToken;
+  }
+
+  async function marinaRefreshAccessToken() {
+    if (marinaRefreshPromise) return marinaRefreshPromise;
+    marinaRefreshPromise = (async () => {
+      const refreshToken = String(await SecureStorage.get(MARINA_REFRESH_TOKEN_KEY) || "");
+      if (!refreshToken) throw Object.assign(new Error("Conectarea Marina este necesară."), { code: "marina_reconnect_required", auth: true, permanent: true });
+      try { return await marinaTokenRequest({ grant_type: "refresh_token", client_id: marinaBuildConfig.clientId, refresh_token: refreshToken }); }
+      catch (error) { marinaAccessToken = ""; marinaAccessExpiresAt = 0; await SecureStorage.remove(MARINA_REFRESH_TOKEN_KEY); throw error; }
+    })();
+    try { return await marinaRefreshPromise; } finally { marinaRefreshPromise = null; }
+  }
+
+  async function marinaBearer() {
+    if (marinaAccessToken && marinaAccessExpiresAt > Date.now() + 60000) return marinaAccessToken;
+    return marinaRefreshAccessToken();
+  }
+
+  async function marinaRequest(path, { method = "GET", body, retry = true, headers = {} } = {}) {
+    const token = await marinaBearer();
+    const response = await CapacitorHttp.request({
+      url: `${marinaBuildConfig.apiBaseUrl}${path}`,
+      method,
+      headers: { Accept: "application/json", Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }), ...headers },
+      data: body,
+      connectTimeout: 15000,
+      readTimeout: 15000
+    });
+    if (response.status === 401 && retry) { await marinaRefreshAccessToken(); return marinaRequest(path, { method, body, retry: false, headers }); }
+    const payload = mobilePayload(response);
+    if (response.status < 200 || response.status >= 300) throw Object.assign(new Error(payload.detail || payload.message || `API-ul Marina a returnat HTTP ${response.status}.`), { code: payload.code || `marina_http_${response.status}`, status: response.status, auth: response.status === 401 || response.status === 403, conflict: response.status === 409 });
+    return payload;
+  }
+
+  async function connectMarina() {
+    if (!marinaBuildConfig.configured) throw Object.assign(new Error("Clientul OAuth public Marina nu este configurat."), { code: "marina_oauth_config_incomplete", permanent: true });
+    const metadata = await marinaDiscover();
+    const pair = await MarinaOAuth.createPkcePair();
+    const state = MarinaOAuth.createState();
+    marinaPending = { codeVerifier: pair.codeVerifier, state };
+    const url = MarinaOAuth.buildAuthorizationUrl({ authorizationEndpoint: metadata.authorizationEndpoint, clientId: marinaBuildConfig.clientId, redirectUri: marinaBuildConfig.redirectUris.mobile, scopes: marinaBuildConfig.scopes, state, codeChallenge: pair.codeChallenge });
+    await Browser.open({ url });
+    return configuredState(false, true, "marina");
+  }
+
+  async function acceptMarinaCallback(url) {
+    if (!marinaPending) return;
+    const callback = MarinaOAuth.parseCallbackUrl(url, { protocol: "ro.marinapark.booking.mobile:", pathname: "/callback" });
+    MarinaOAuth.validateState(marinaPending.state, callback.state);
+    const verifier = marinaPending.codeVerifier;
+    marinaPending = null;
+    await marinaTokenRequest({ grant_type: "authorization_code", client_id: marinaBuildConfig.clientId, code: callback.code, redirect_uri: marinaBuildConfig.redirectUris.mobile, code_verifier: verifier });
+    await Browser.close();
+    rememberConnection("marina", true, false);
+    if (currentSource === "marina" && currentRange) emit(await refresh(currentRange));
+  }
+
+  async function disconnectMarina() {
+    const refreshToken = String(await SecureStorage.get(MARINA_REFRESH_TOKEN_KEY) || "");
+    try {
+      if (refreshToken) {
+        const metadata = await marinaDiscover();
+        await CapacitorHttp.post({ url: metadata.revocationEndpoint, headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" }, data: MarinaOAuth.formBody({ token: refreshToken, token_type_hint: "refresh_token", client_id: marinaBuildConfig.clientId }) });
+      }
+    } finally {
+      marinaAccessToken = "";
+      marinaAccessExpiresAt = 0;
+      marinaPending = null;
+      await SecureStorage.remove(MARINA_REFRESH_TOKEN_KEY);
+      await mutateJson(CACHE_KEY, defaultCache, (cache) => { cache.marina = defaultCache().marina; });
+      rememberConnection("marina", false, true);
+    }
+    const next = await configuredState(false, true, "marina");
+    if (currentSource === "marina") emit(next);
+    return next;
+  }
+
+  App.addListener("appUrlOpen", ({ url }) => { if (String(url).startsWith("ro.marinapark.booking.mobile://")) void acceptMarinaCallback(url).catch((error) => { marinaPending = null; console.error("Marina OAuth callback failed:", error.code || error.message); }); });
+
   function updateActionHistory(source, update) {
     const operation = actionHistoryWrite.catch(() => {}).then(async () => {
       const history = await allActionHistory();
@@ -157,6 +308,17 @@ if (!window.marina) {
   async function updateAction(source, id, patch) {
     await updateActionHistory(source, (items) => items.map((item) => item.id === id ? { ...item, ...patch } : item));
     await emitCurrentState(source);
+  }
+
+  function queuedFailure(action, error) {
+    const attempt = Number(action.attempts || 0) + Math.max(1, Number(error.requestAttempts) || 1);
+    const temporary = !["endpoint_changed", "queue_metadata_missing"].includes(error.code) && (error.temporary || error.rateLimited || error.unknownOutcome);
+    if (temporary && attempt < MAX_AUTOMATIC_ACTION_ATTEMPTS) return { retry: true, status: "queued", attempt };
+    if (temporary) {
+      const uncertain = error.unknownOutcome || error.code === "marina_booking_api_request_in_progress";
+      return { retry: false, status: uncertain ? "needs_attention" : "failed", attempt, limitReached: true };
+    }
+    return { retry: false, status: error.code === "endpoint_changed" ? "needs_attention" : (error.status === 409 || error.conflict ? "conflict" : "failed"), attempt, limitReached: false };
   }
 
   async function trackedMutation({ source, key, type, bookingLocalId = null, resourceId = null, payload = {}, apiBaseUrl, idempotencyKey, editIntent = null, noteIdempotencyKey = null, signature = null }, task) {
@@ -225,18 +387,17 @@ if (!window.marina) {
           });
           return result;
         } catch (error) {
-          const temporary = !["endpoint_changed", "queue_metadata_missing"].includes(error.code) && (error.temporary || error.rateLimited || error.unknownOutcome);
+          const failure = queuedFailure(action, error);
           const completedAt = new Date().toISOString();
-          const status = temporary ? "queued" : (error.code === "endpoint_changed" ? "needs_attention" : (error.status === 409 || error.conflict ? "conflict" : "failed"));
           await updateAction(source, action.id, {
-            status,
-            errorCode: error.code || "request_failed",
-            errorMessage: error.message || "Acțiunea nu a putut fi finalizată.",
-            availableAt: temporary ? new Date(Date.now() + retryDelayMs(Number(action.attempts || 0) + 1, error.retryAfter)).toISOString() : action.availableAt,
+            status: failure.status,
+            errorCode: failure.limitReached ? "automatic_retry_limit_reached" : error.code || "request_failed",
+            errorMessage: failure.limitReached ? `${error.message || "Acțiunea nu a putut fi finalizată."} Acțiunea a fost oprită după două încercări.` : error.message || "Acțiunea nu a putut fi finalizată.",
+            availableAt: failure.retry ? new Date(Date.now() + retryDelayMs(failure.attempt, error.retryAfter)).toISOString() : action.availableAt,
             updatedAt: completedAt,
-            completedAt: temporary ? null : completedAt
+            completedAt: failure.retry ? null : completedAt
           });
-          if (temporary) scheduleActionQueue(source, retryDelayMs(Number(action.attempts || 0) + 1, error.retryAfter));
+          if (failure.retry) scheduleActionQueue(source, retryDelayMs(failure.attempt, error.retryAfter));
           throw error;
         }
       });
@@ -336,7 +497,8 @@ if (!window.marina) {
     if (options.body !== undefined) headers["Content-Type"] = "application/json";
     if (options.idempotencyKey) headers["Idempotency-Key"] = options.idempotencyKey;
     const retryable = options.retry !== false && (method === "GET" || Boolean(options.idempotencyKey) || options.readOnly === true);
-    const maxAttempts = retryable ? Math.max(1, Number(options.maxAttempts) || 3) : 1;
+    const defaultAttempts = method === "GET" || options.readOnly === true ? 3 : 2;
+    const maxAttempts = retryable ? Math.max(1, Number(options.maxAttempts) || defaultAttempts) : 1;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       let response;
       let error;
@@ -399,7 +561,10 @@ if (!window.marina) {
           error.payload = payload;
         }
       }
-      if (!retryable || !error.temporary || attempt >= maxAttempts) throw error;
+      if (!retryable || !error.temporary || attempt >= maxAttempts) {
+        error.requestAttempts = attempt;
+        throw error;
+      }
       await wait(retryDelayMs(attempt, error.retryAfter));
     }
     throw new Error("Cererea API nu a putut fi finalizată.");
@@ -489,7 +654,12 @@ if (!window.marina) {
   async function configuredState(online = false, authPaused = false, source = currentSource) {
     const [settings, cache, actions, password] = await Promise.all([allSettings(), allCache(), allActionHistory(), passwordFor(source)]);
     const result = stateFrom(cache, settings, actions, online, authPaused, source);
-    result.settings = { ...result.settings, credentialsConfigured: Boolean(password) };
+    if (source === "marina") {
+      const connected = Boolean(marinaAccessToken || await SecureStorage.get(MARINA_REFRESH_TOKEN_KEY));
+      const capabilities = MarinaConfig.capabilities(marinaEffectiveScopes);
+      result.settings = { ...result.settings, connected, connecting: Boolean(marinaPending), credentialsConfigured: connected, oauthScopes: marinaEffectiveScopes.join(" "), capabilities, connectionStatus: connected ? "connected" : marinaPending ? "connecting" : marinaBuildConfig.configured ? "disconnected" : "disabled" };
+      result.diagnostics.authPaused = !connected;
+    } else result.settings = { ...result.settings, credentialsConfigured: Boolean(password) };
     return result;
   }
 
@@ -516,6 +686,47 @@ if (!window.marina) {
   async function refresh(range) {
     currentRange = range;
     const source = currentSource;
+    if (source === "marina") {
+      const connected = Boolean(marinaAccessToken || await SecureStorage.get(MARINA_REFRESH_TOKEN_KEY));
+      if (!connected) return configuredState(false, true, source); // A pre-login 401 is expected; do not probe protected routes.
+      try {
+        if (!MarinaConfig.capabilities(marinaEffectiveScopes).resourcesRead) return configuredState(true, false, source);
+        const resourcePayload = await marinaRequest("/v1/resources");
+        const resourceRows = Array.isArray(resourcePayload?.data) ? resourcePayload.data : Array.isArray(resourcePayload?.resources) ? resourcePayload.resources : Array.isArray(resourcePayload) ? resourcePayload : [];
+        const marinaUiId = (value) => { let hash = 2166136261; for (const char of `marina:${value}`) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619); return (hash >>> 1) || 1; };
+        const resources = resourceRows.map((resource) => ({ id: marinaUiId(resource.id), provider: "marina", providerId: String(resource.id), title: String(resource.title || resource.name || `Marina ${resource.id}`), capacity: Number(resource.capacity) || null, defaultForm: "marina", active: resource.active !== false }));
+        const bookings = [];
+        let after = "";
+        if (MarinaConfig.capabilities(marinaEffectiveScopes).bookingsRead) do {
+          const params = new URLSearchParams({ from: range.start, to: range.end, limit: "200" });
+          if (after) params.set("after", after);
+          const payload = await marinaRequest(`/v1/bookings?${params}`);
+          const rows = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.bookings) ? payload.bookings : Array.isArray(payload) ? payload : [];
+          for (const booking of rows) {
+            const providerResourceId = String(booking.resource_id ?? booking.resourceId ?? booking.resource?.id ?? "");
+            const start = String(booking.start_date ?? booking.start_at ?? "").slice(0, 10);
+            const end = String(booking.end_date ?? booking.end_at ?? start).slice(0, 10);
+            const dates = [];
+            for (let cursor = start; /^\d{4}-\d{2}-\d{2}$/.test(cursor) && cursor <= end && dates.length < 366;) { dates.push(cursor); const next = new Date(`${cursor}T00:00:00Z`); next.setUTCDate(next.getUTCDate() + 1); cursor = next.toISOString().slice(0, 10); }
+            const customer = booking.customer || booking.guest || {};
+            const guests = booking.guests || {};
+            const status = String(booking.status || "pending").toLowerCase();
+            bookings.push({ localId: `marina:${booking.id}`, serverId: String(booking.id), provider: "marina", providerId: String(booking.id), providerResourceId, resourceId: marinaUiId(providerResourceId), status: ["approved", "confirmed", "active"].includes(status) ? "approved" : "pending", providerStatus: status, trashed: ["cancelled", "canceled", "deleted"].includes(status), note: String(booking.note || booking.internal_note || ""), formData: { name: { value: String(customer.first_name ?? customer.firstName ?? booking.name ?? ""), type: "text" }, secondname: { value: String(customer.last_name ?? customer.lastName ?? ""), type: "text" }, email: { value: String(customer.email ?? booking.email ?? ""), type: "email" }, phone: { value: String(customer.phone ?? booking.phone ?? ""), type: "text" }, visitors: { value: String(guests.adults ?? booking.adults ?? 1), type: "selectbox-one" }, children: { value: String(guests.children ?? booking.children ?? 0), type: "selectbox-one" } }, dates, syncState: "synced", version: booking.version ?? null });
+          }
+          after = payload?.next_cursor ?? payload?.pagination?.next_cursor ?? payload?.meta?.next_cursor ?? "";
+        } while (after);
+        await mutateJson(CACHE_KEY, defaultCache, (cache) => { cache.marina = { resources, bookings, updatedAt: new Date().toISOString() }; });
+        rememberConnection("marina", true, false);
+        const next = await configuredState(true, false, source);
+        emit(next);
+        return next;
+      } catch (error) {
+        rememberConnection("marina", Boolean(error.auth), Boolean(error.auth));
+        const cached = await configuredState(Boolean(error.auth), Boolean(error.auth), source);
+        emit(cached);
+        throw error;
+      }
+    }
     const expectedApiBaseUrl = normalizeBaseUrl((await allSettings())[source]?.apiBaseUrl);
     const operationKey = `${source}:${range.start}:${range.end}:${expectedApiBaseUrl}`;
     const inFlight = refreshOperations.get(operationKey);
@@ -589,6 +800,7 @@ if (!window.marina) {
   async function refreshIfConfigured({ force = false } = {}) {
     if (!currentRange) return;
     const source = currentSource;
+    if (source === "marina") return;
     const connection = connectionFor(source);
     if (!force && connection.online && Date.now() - connection.lastSuccessfulAt < MOBILE_REFRESH_INTERVAL_MS) return;
     const settings = (await allSettings())[source];
@@ -945,11 +1157,17 @@ if (!window.marina) {
               const completedAt = new Date().toISOString();
               await updateAction(source, action.id, { status: "synced", result: canonicalValue(response), errorCode: null, errorMessage: null, completedAt, updatedAt: completedAt });
             } catch (error) {
-              const temporary = !["endpoint_changed", "queue_metadata_missing"].includes(error.code) && (error.temporary || error.rateLimited || error.unknownOutcome);
-              const delay = retryDelayMs(Number(action.attempts || 0) + 1, error.retryAfter);
-              const status = temporary ? "queued" : (error.code === "endpoint_changed" ? "needs_attention" : (error.status === 409 || error.conflict ? "conflict" : "failed"));
-              await updateAction(source, action.id, { status, availableAt: temporary ? new Date(Date.now() + delay).toISOString() : action.availableAt, errorCode: error.code || "request_failed", errorMessage: error.message || "Acțiunea nu a putut fi finalizată.", updatedAt: new Date().toISOString() });
-              if (temporary) scheduleActionQueue(source, delay);
+              const failure = queuedFailure(action, error);
+              const delay = retryDelayMs(failure.attempt, error.retryAfter);
+              await updateAction(source, action.id, {
+                status: failure.status,
+                availableAt: failure.retry ? new Date(Date.now() + delay).toISOString() : action.availableAt,
+                errorCode: failure.limitReached ? "automatic_retry_limit_reached" : error.code || "request_failed",
+                errorMessage: failure.limitReached ? `${error.message || "Acțiunea nu a putut fi finalizată."} Acțiunea a fost oprită după două încercări.` : error.message || "Acțiunea nu a putut fi finalizată.",
+                completedAt: failure.retry ? null : new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+              });
+              if (failure.retry) scheduleActionQueue(source, delay);
               throw error;
             }
           });
@@ -1097,8 +1315,29 @@ if (!window.marina) {
     throw Object.assign(new Error("Tipul acțiunii din coadă nu este recunoscut."), { code: "unsupported_queue_action", permanent: true });
   }
 
+  async function marinaCachedBooking(localId) { return (await allCache()).marina.bookings.find((booking) => booking.localId === String(localId)); }
+  async function marinaProviderResourceId(resourceId) {
+    const resource = (await allCache()).marina.resources.find((item) => Number(item.id) === Number(resourceId));
+    if (!resource) throw Object.assign(new Error("Resursa Marina nu mai este disponibilă."), { code: "marina_resource_missing", permanent: true });
+    return resource.providerId;
+  }
+  async function marinaMutation(path, body, { method = "POST", version } = {}) {
+    const headers = { "Idempotency-Key": crypto.randomUUID() };
+    if (version !== undefined && version !== null) headers["If-Match"] = String(version);
+    const result = await marinaRequest(path, { method, body, headers });
+    if (currentRange) await refresh(currentRange);
+    return result?.data || result?.booking || result;
+  }
+  async function marinaBookingBody(input) {
+    const dates = [...input.dates].sort();
+    const value = (name) => String(input.formData?.[name]?.value ?? "").trim();
+    return { resource_id: await marinaProviderResourceId(input.resourceId), start_date: dates[0], end_date: dates.at(-1), customer: { first_name: value("name"), last_name: value("secondname"), email: value("email"), phone: value("phone") }, guests: { adults: Number(value("visitors")) || 1, children: Number(value("children")) || 0 } };
+  }
+
   window.marina = Object.freeze({
     platform: "android",
+    connectMarina,
+    disconnectMarina,
     setSource(source) {
       if (!SOURCES.has(source)) throw new TypeError("Sursa rezervărilor este invalidă.");
       currentSource = source;
@@ -1117,6 +1356,13 @@ if (!window.marina) {
     refresh,
     async createBooking(input) {
       const source = SOURCES.has(input?.source) ? input.source : currentSource;
+      assertWritableSource(source);
+      if (source === "marina") {
+        const created = await marinaMutation("/v1/bookings", await marinaBookingBody(input));
+        const id = created?.id ?? created?.booking_id;
+        if (input.note && id !== undefined) await marinaMutation(`/v1/bookings/${encodeURIComponent(id)}/notes`, { note: input.note });
+        return { ...created, localId: id === undefined ? null : `marina:${id}`, serverId: id };
+      }
       const stayTimes = source === "camping" ? { checkIn: "14:00:01", checkOut: "12:00:02" } : {};
       const dates = window.BookingCalendar.toStayDateTimes(input.dates, stayTimes);
       const inFlightKey = JSON.stringify(canonicalValue({ source, ...input, dates }));
@@ -1135,6 +1381,13 @@ if (!window.marina) {
     },
     async editBooking(id, patch) {
       const source = SOURCES.has(patch?.source) ? patch.source : currentSource;
+      assertWritableSource(source);
+      if (source === "marina") {
+        const booking = await marinaCachedBooking(id);
+        if (!booking) throw new Error("Rezervarea Marina nu există în cache.");
+        const body = await marinaBookingBody({ ...booking, ...patch, formData: patch.formData || booking.formData, dates: patch.dates || booking.dates });
+        return marinaMutation(`/v1/bookings/${encodeURIComponent(booking.providerId)}`, body, { method: "PATCH", version: booking.version });
+      }
       const bookingId = serverId(id);
       const requestedFormData = BookingFields.prepareFormData(patch.formData, patch.sourceResourceId);
       const editIntent = captureEditIntent(await cachedBooking(source, bookingId), patch, requestedFormData);
@@ -1142,15 +1395,19 @@ if (!window.marina) {
       const apiBaseUrl = normalizeBaseUrl((await allSettings())[source]?.apiBaseUrl);
       return trackedMutation({ source, key: `booking:${source}:${bookingId}`, type: "edit", bookingLocalId: id, resourceId: patch.resourceId, payload: mutationPatch, apiBaseUrl, editIntent }, (action) => executeEditAction(source, action));
     },
-    setStatus: (id, patch) => mutate(id, "/status", { status: patch.status, send_email: Boolean(patch.sendEmail) }, SOURCES.has(patch?.source) ? patch.source : currentSource),
-    setNote: (id, patch) => mutate(id, "/note", { note: String(patch.note || "") }, SOURCES.has(patch?.source) ? patch.source : currentSource),
-    setTrash: (id, patch) => mutate(id, "/trash", { trash: Boolean(patch.trashed), send_email: Boolean(patch.sendEmail) }, SOURCES.has(patch?.source) ? patch.source : currentSource),
+    setStatus: async (id, patch) => { const source = SOURCES.has(patch?.source) ? patch.source : currentSource; assertWritableSource(source); if (source === "marina") { const booking = await marinaCachedBooking(id); return marinaMutation(`/v1/bookings/${encodeURIComponent(booking.providerId)}/status`, { status: patch.status }, { version: booking.version }); } return mutate(id, "/status", { status: patch.status, send_email: Boolean(patch.sendEmail) }, source); },
+    setNote: async (id, patch) => { const source = SOURCES.has(patch?.source) ? patch.source : currentSource; assertWritableSource(source); if (source === "marina") { const booking = await marinaCachedBooking(id); return marinaMutation(`/v1/bookings/${encodeURIComponent(booking.providerId)}/notes`, { note: String(patch.note || "") }); } return mutate(id, "/note", { note: String(patch.note || "") }, source); },
+    setTrash: async (id, patch) => { const source = SOURCES.has(patch?.source) ? patch.source : currentSource; assertWritableSource(source); if (source === "marina") { if (!patch.trashed) throw Object.assign(new Error("Rezervarea Marina anulată nu poate fi restaurată din calendar."), { code: "marina_restore_unsupported", permanent: true }); const booking = await marinaCachedBooking(id); return marinaMutation(`/v1/bookings/${encodeURIComponent(booking.providerId)}/cancel`, {}, { version: booking.version }); } return mutate(id, "/trash", { trash: Boolean(patch.trashed), send_email: Boolean(patch.sendEmail) }, source); },
     async getPayment(id, input = {}) {
       const source = SOURCES.has(input?.source) ? input.source : currentSource;
+      assertWritableSource(source);
+      if (source === "marina") throw Object.assign(new Error("API-ul Marina nu expune operațiuni de plată în contractul integrat."), { code: "marina_feature_unsupported", permanent: true });
       return request(`/bookings/${serverId(id)}/payment`, {}, null, source).then(({ payload }) => payload);
     },
     async updateDeposit(id, input) {
       const source = SOURCES.has(input?.source) ? input.source : currentSource;
+      assertWritableSource(source);
+      if (source === "marina") throw Object.assign(new Error("API-ul Marina nu expune operațiuni de plată în contractul integrat."), { code: "marina_feature_unsupported", permanent: true });
       const booking = await cachedBooking(source, serverId(id));
       if (!booking) throw new Error("Rezervarea nu există în cache.");
       const actions = (await allActionHistory())[source] || [];
@@ -1167,6 +1424,8 @@ if (!window.marina) {
     },
     async requestPayment(id, input = {}) {
       const source = SOURCES.has(input?.source) ? input.source : currentSource;
+      assertWritableSource(source);
+      if (source === "marina") throw Object.assign(new Error("API-ul Marina nu expune operațiuni de plată în contractul integrat."), { code: "marina_feature_unsupported", permanent: true });
       const paymentRequest = PaymentRequest.validate(input);
       const booking = await cachedBooking(source, serverId(id));
       if (!booking) throw new Error("Rezervarea nu există în cache.");
@@ -1181,6 +1440,8 @@ if (!window.marina) {
     },
     checkAvailability(input) {
       const source = SOURCES.has(input?.source) ? input.source : currentSource;
+      assertWritableSource(source);
+      if (source === "marina") return (async () => { const dates = [...input.dates].map((date) => String(date).slice(0, 10)).sort(); const body = { resource_id: await marinaProviderResourceId(input.resourceId), start_date: dates[0], end_date: dates.at(-1) }; if (input.excludeBookingId) body.exclude_booking_id = (await marinaCachedBooking(input.excludeBookingId))?.providerId; return marinaRequest("/v1/availability/check", { method: "POST", body }); })();
       const body = { resource_id: Number(input.resourceId), dates: input.dates };
       if (input.excludeBookingId !== undefined && input.excludeBookingId !== null) body.exclude_booking_id = Number(input.excludeBookingId);
       return request("/availability", { method: "POST", body, readOnly: true }, null, source).then(({ payload }) => {
@@ -1190,6 +1451,8 @@ if (!window.marina) {
     },
     async quoteBooking(input) {
       const source = SOURCES.has(input?.source) ? input.source : currentSource;
+      assertWritableSource(source);
+      if (source === "marina") { const days = Math.max(1, input.dates.length); return { valid: true, mode: input.mode || "fast", total: 0, deposit: 0, balance: 0, days, nights: Math.max(0, days - 1), formatted: { total: "Gestionat de Marina", deposit: "—", balance: "—" } }; }
       const formData = BookingFields.prepareFormData(input.formData, input.sourceResourceId);
       const key = JSON.stringify(canonicalValue({ source, resourceId: input.resourceId, dates: [...input.dates].sort(), formData, bookingFormType: input.bookingFormType, mode: input.mode }));
       const cached = input.forceFresh ? null : quoteCache.get(key);
@@ -1201,6 +1464,7 @@ if (!window.marina) {
     },
     clearQuoteCache() { quoteCache.clear(); },
     async retryCommand(id) {
+      assertWritableSource(currentSource);
       const actions = (await allActionHistory())[currentSource] || [];
       const action = actions.find((item) => item.id === id);
       if (!action || !["create", "edit", "status", "note", "trash", "deposit_update", "payment_request"].includes(action.type)) throw new Error("Această acțiune nu poate fi reîncercată pe telefon.");
@@ -1212,6 +1476,7 @@ if (!window.marina) {
     },
     async clearFailedCommands() {
       const source = currentSource;
+      assertWritableSource(source);
       const snapshot = (await allActionHistory())[source] || [];
       const failures = snapshot.filter((item) => ["failed", "conflict", "needs_attention"].includes(item.status));
       if (!failures.length) return 0;
@@ -1243,6 +1508,7 @@ if (!window.marina) {
       return failures.length;
     },
     async revertBooking(id) {
+      assertWritableSource(currentSource);
       const actions = (await allActionHistory())[currentSource] || [];
       const relevant = actions.filter((item) => item.bookingLocalId === id && ["deposit_update", "payment_request"].includes(item.type) && ["queued", "sending", "failed", "conflict", "needs_attention"].includes(item.status));
       if (!relevant.length) throw new Error("Nu există o operație de plată care poate fi anulată.");
@@ -1254,11 +1520,14 @@ if (!window.marina) {
     },
     async getSettings(requestedSource = currentSource) {
       const source = SOURCES.has(requestedSource) ? requestedSource : currentSource;
+      if (source === "marina") return (await configuredState(false, true, source)).settings;
       const settings = (await allSettings())[source];
       return { ...settings, credentialsConfigured: Boolean(await passwordFor(source)) };
     },
     async saveSettings(input) {
       const source = SOURCES.has(input?.source) ? input.source : currentSource;
+      assertWritableSource(source);
+      if (source === "marina") throw Object.assign(new Error("Configurația OAuth Marina este inclusă la construirea aplicației."), { code: "marina_settings_managed", permanent: true });
       const settings = await allSettings();
       const existingPassword = await passwordFor(source);
       if (!input.password && !existingPassword) throw new Error("Parola de aplicație este obligatorie la prima salvare.");
@@ -1276,6 +1545,8 @@ if (!window.marina) {
     },
     async testConnection(input) {
       const source = SOURCES.has(input?.source) ? input.source : currentSource;
+      assertWritableSource(source);
+      if (source === "marina") { const next = await refresh(currentRange || { start: new Date().toISOString().slice(0, 10), end: new Date().toISOString().slice(0, 10) }); return { ok: true, resources: next.resources.length }; }
       const override = { ...input, apiBaseUrl: normalizeBaseUrl(input.apiBaseUrl), password: input.password || await passwordFor(source) };
       const { payload } = await request("/resources", {}, override, source);
       if (!Array.isArray(payload?.resources)) throw new Error("Endpoint-ul resurselor a returnat un format necunoscut.");
@@ -1283,6 +1554,8 @@ if (!window.marina) {
     },
     async clearCredentials(requestedSource = currentSource) {
       const source = SOURCES.has(requestedSource) ? requestedSource : currentSource;
+      assertWritableSource(source);
+      if (source === "marina") return (await disconnectMarina()).settings;
       const settings = await allSettings();
       settings[source] = defaultSettings()[source];
       await Promise.all([writeJson(SETTINGS_KEY, settings), SecureStorage.remove(`${PASSWORD_PREFIX}${source}`)]);

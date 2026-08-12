@@ -24,3 +24,10 @@ test("WordPress availability uses Booking Calendar's native edit exclusion", () 
   assert.doesNotMatch(availabilitySource, /'as_single_resource'\s*=> true/);
   assert.match(pluginSource, /'available'\s*=> ! \$is_booked/);
 });
+
+test("capacity-aware availability preserves the submitted resource for rooms and parent resources", () => {
+  assert.match(availabilitySource, /'resource_id'\s*=> \$resource_id/);
+  assert.match(availabilitySource, /'how_many_items_to_book'\s*=> 1/);
+  assert.match(availabilitySource, /'as_single_resource'\s*=> false/);
+  assert.doesNotMatch(availabilitySource, /wpbc_api_is_dates_booked/);
+});

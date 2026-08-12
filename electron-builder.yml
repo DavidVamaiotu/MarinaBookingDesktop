@@ -1,5 +1,9 @@
 appId: ro.marinapark.booking.desktop
 productName: Marina Booking Desktop
+protocols:
+  - name: Marina Booking OAuth
+    schemes:
+      - ro.marinapark.booking.desktop
 asar: true
 compression: maximum
 npmRebuild: false

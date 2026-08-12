@@ -8,6 +8,7 @@ const timelineScale = $("#timelineScale");
 const guestTimeline = $("#guestTimeline");
 const timelinePanel = document.querySelector(".timeline-panel");
 const timelineHeader = $("#timelineHeader");
+const marinaSetupPanel = $("#marinaSetupPanel");
 const availabilityPage = $("#availabilityPage");
 const availabilityGrid = $("#availabilityGrid");
 const openAvailability = $("#openAvailability");
@@ -56,24 +57,60 @@ let availabilityWindowEnd = iso(addDays(availabilityWindowStart, AVAILABILITY_WI
 let availabilityScrollLeft = 0;
 let availabilityScrollFrame = null;
 let availabilityLastShiftAt = 0;
+let marinaMigrationRunning = false;
 
 function updateWorkspaceUi() {
   const camping = activeWorkspace === "camping";
-  if (camping && availabilityViewActive) setAvailabilityView(false);
+  const marina = activeWorkspace === "marina";
+  const marinaConnected = marina && state.settings?.connected === true;
+  const marinaCanWrite = marinaConnected && state.settings?.capabilities?.canMutateBookings === true;
+  if ((camping || marina) && availabilityViewActive) setAvailabilityView(false);
   timelineShell.classList.toggle("is-camping-workspace", camping);
-  openAvailability.hidden = camping;
+  openAvailability.hidden = camping || marina;
+  const marinaMigrationAvailable = typeof window.marina.previewMarinaMigration === "function" && typeof window.marina.runMarinaMigration === "function";
+  $("#marinaMigrationAction").hidden = !marinaConnected || !marinaMigrationAvailable;
+  $("#marinaMigrationAction").disabled = marinaMigrationRunning || state.settings?.capabilities?.canManageResources !== true || state.settings?.capabilities?.canMutateBookings !== true;
+  timelineHeader.hidden = marina && !marinaConnected;
+  timelineShell.hidden = marina && !marinaConnected;
+  cameraContent.hidden = marina && !marinaConnected;
+  marinaSetupPanel.hidden = !marina || marinaConnected;
+  timelinePanel.setAttribute("aria-labelledby", marina && !marinaConnected ? "marinaSetupTitle" : availabilityViewActive ? "availabilityTitle" : "timelineTitle");
+  $("#openCreate").disabled = marina ? !marinaCanWrite || state.resources.length === 0 : false;
+  $("#openSettings").disabled = false;
   document.querySelectorAll("[data-workspace]").forEach((button) => {
     const active = button.dataset.workspace === activeWorkspace;
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-selected", String(active));
   });
-  $("#timelineTitle").textContent = camping ? "Calendar camping" : "Calendar camere";
-  $("#timelineSubtitle").textContent = camping ? "Corturi și rulote" : "Camere și bungalow-uri";
-  $("#openCreate").textContent = camping ? "Rezervare camping" : "Rezervare nouă";
+  $("#timelineTitle").textContent = marina ? "Marina Calendar" : camping ? "Calendar camping" : "Calendar camere";
+  $("#timelineSubtitle").textContent = marina ? "Rezervări din booking.husi.ro" : camping ? "Corturi și rulote" : "Camere și bungalow-uri";
+  $("#openCreate").textContent = marina ? "Rezervare Marina" : camping ? "Rezervare camping" : "Rezervare nouă";
+  updateMarinaSetupUi();
+}
+
+function updateMarinaSetupUi() {
+  if (!marinaSetupPanel) return;
+  const settings = state.settings || {};
+  const configured = settings.configured === true;
+  $("#marinaSetupStatus").textContent = settings.configurationError
+    ? "Configurație invalidă"
+    : settings.connecting ? "Se așteaptă autentificarea"
+      : settings.connected ? "Conectat" : configured ? "Pregătit pentru conectare" : "Dezactivat";
+  $("#marinaSetupDetail").textContent = settings.configurationError
+    ? "Configurația Marina nu poate fi activată până când URL-ul API este corectat."
+    : settings.connecting ? "Finalizează autorizarea în browserul sistemului. Calendarul se va încărca după revenirea în aplicație."
+      : settings.connected ? "Contul Marina este conectat prin OAuth."
+        : configured ? "Conectează contul Marina prin OAuth Authorization Code cu PKCE."
+          : "Calendarul Marina este opțional și rămâne dezactivat până la configurarea clientului OAuth public.";
+  $("#marinaSetupApi").textContent = settings.apiBaseUrl || "https://booking.husi.ro";
+  $("#marinaSetupScopes").textContent = settings.oauthScopes || "resources:read resources:write bookings:read bookings:write";
+  const action = $("#marinaSetupAction");
+  action.disabled = !configured || Boolean(settings.configurationError) || Boolean(settings.connecting);
+  action.textContent = settings.connected ? "Deconectează Marina" : settings.connecting ? "Autentificare în curs…" : "Conectează Marina";
 }
 
 async function switchWorkspace(source) {
-  if (!new Set(["rooms", "camping"]).has(source) || source === activeWorkspace) return;
+  if (!new Set(["rooms", "camping", "marina"]).has(source) || source === activeWorkspace) return;
   cancelDrag();
   const switchId = ++workspaceSwitchId;
   invalidateCalendarRequests();
@@ -87,7 +124,9 @@ async function switchWorkspace(source) {
   diagnostics.hidden = true;
   selectedBookingId = null;
   selectedBookingView = "";
+  showTrashedByWorkspace[activeWorkspace] = showTrashed;
   activeWorkspace = source;
+  showTrashed = showTrashedByWorkspace[source];
   window.marina.setSource(source);
   updateWorkspaceUi();
   const range = currentRange();
@@ -95,7 +134,7 @@ async function switchWorkspace(source) {
     const next = await window.marina.bootstrap(range);
     if (switchId !== workspaceSwitchId || activeWorkspace !== source) return;
     applyState(next);
-    if (state.settings.credentialsConfigured && state.settings.apiBaseUrl) await refreshRange({ force: false, quiet: true });
+    if ((source === "marina" && state.settings.connected) || (source !== "marina" && state.settings.credentialsConfigured && state.settings.apiBaseUrl)) await refreshRange({ force: false, quiet: true });
   } catch (error) {
     if (switchId === workspaceSwitchId && activeWorkspace === source) showError(error);
   }
@@ -168,7 +207,8 @@ let createSelectionStart = "";
 let createSelectionEnd = "";
 let detailsPreferredSelection = { start: "", end: "" };
 let detailsInitialQuoteKey = "";
-let showTrashed = false;
+const showTrashedByWorkspace = { rooms: false, camping: false, marina: false };
+let showTrashed = showTrashedByWorkspace.rooms;
 let lastScrollLeft = 0;
 let lastRecenterAt = 0;
 let suppressMonthUpdate = false;
@@ -579,11 +619,15 @@ const API_ACTION_MESSAGES = Object.freeze({
   retryCommand: ["Se reîncearcă acțiunea…", "Acțiunea a fost retrimisă."],
   revertBooking: ["Se anulează modificarea locală…", "Modificarea locală a fost anulată."],
   clearFailedCommands: ["Se curăță acțiunile eșuate…", "Acțiunile eșuate au fost curățate."],
+  pauseQueue: ["Se opresc acțiunile…", "Acțiunile au fost oprite."],
+  resumeQueue: ["Se repornesc acțiunile…", "Acțiunile au fost repornite."],
   testConnection: ["Se testează conexiunea API…", "Conexiunea API funcționează."]
 });
 const DESKTOP_QUEUE_MESSAGES = Object.freeze({
   revertBooking: "Modificarea locală a fost anulată.",
-  clearFailedCommands: "Acțiunile eșuate au fost curățate."
+  clearFailedCommands: "Acțiunile eșuate au fost curățate.",
+  pauseQueue: "Acțiunile au fost oprite.",
+  resumeQueue: "Acțiunile au fost repornite."
 });
 const apiToastErrors = new WeakSet();
 const toastTimers = new WeakMap();
@@ -682,15 +726,32 @@ function resourceById(resourceId) { return state.resources.find((resource) => Nu
 
 function updateSyncUi() {
   const info = state.diagnostics || {};
+  const marina = activeWorkspace === "marina";
+  const queueControlsAvailable = window.marina.platform !== "android" && !marina;
+  $("#pauseQueue").hidden = !queueControlsAvailable || Boolean(info.queuePaused);
+  $("#resumeQueue").hidden = !queueControlsAvailable || !info.queuePaused;
+  if (marina) {
+    const indicator = $("#syncIndicator");
+    indicator.className = `sync-indicator ${info.online ? "online" : "offline"}`;
+    indicator.dataset.issueCount = "";
+    $("#syncText").textContent = state.settings?.connecting ? "Autentificare…" : state.settings?.connected ? info.online ? "Conectat" : "Conectat, nesincronizat" : "Deconectat";
+    $("#syncCounts").textContent = state.settings?.connected ? `${state.resources.length} resurse` : "OAuth necesar";
+    $("#banner").hidden = true;
+    updateMarinaSetupUi();
+    return;
+  }
   const campingSetupRequired = activeWorkspace === "camping" && !state.settings?.credentialsConfigured;
   const endpointChanged = state.commands.some((command) => command.errorCode === "endpoint_changed");
   const indicator = $("#syncIndicator");
   indicator.className = `sync-indicator ${info.failed ? "attention" : info.online ? "online" : "offline"}`;
   indicator.dataset.issueCount = info.failed || "";
-  $("#syncText").textContent = endpointChanged ? "Verifică adresa API" : info.authPaused ? "Verifică datele de acces" : info.online ? "Conectat" : "Deconectat";
+  $("#syncText").textContent = info.queuePaused ? "Acțiuni oprite" : endpointChanged ? "Verifică adresa API" : info.authPaused ? "Verifică datele de acces" : info.online ? "Conectat" : "Deconectat";
   $("#syncCounts").textContent = `${info.queued || 0} în coadă · ${info.failed || 0} cu probleme`;
   const banner = $("#banner");
-  if (campingSetupRequired) {
+  if (info.queuePaused) {
+    banner.hidden = false;
+    banner.textContent = "Acțiunile automate sunt oprite. Comenzile rămân local până când apeși Repornește acțiunile.";
+  } else if (campingSetupRequired) {
     banner.hidden = false;
     banner.textContent = "Camping este pregătit local. Instalează Marina Booking API pe camping.marinapark.ro și configurează parola de aplicație în Setări pentru sincronizare.";
   } else if (endpointChanged) {
@@ -726,10 +787,10 @@ function fillResourceSelects() {
 function updateTrashedToggle() {
   const button = $("#toggleTrashed");
   const count = state.bookings.filter((booking) => booking.trashed).length;
-  if (!count) showTrashed = false;
+  showTrashedByWorkspace[activeWorkspace] = showTrashed;
   button.disabled = count === 0;
-  button.setAttribute("aria-pressed", String(showTrashed));
-  button.textContent = showTrashed ? `Ascunde gunoiul (${count})` : `Afișează gunoiul (${count})`;
+  button.setAttribute("aria-pressed", String(count > 0 && showTrashed));
+  button.textContent = count > 0 && showTrashed ? `Ascunde gunoiul (${count})` : `Afișează gunoiul (${count})`;
 }
 
 function renderScale() {
@@ -1233,13 +1294,14 @@ function renderCommands() {
   $("#clearQueueIssues").hidden = failedCount === 0;
   const info = state.diagnostics;
   const cache = info.cache?.loadedAt ? `${info.cache.startDate}–${info.cache.endDate}, verificat ${new Date(info.cache.loadedAt).toLocaleString("ro-RO")}` : "nu este încărcat";
-  $("#diagnosticSummary").textContent = `Conectare: ${info.online ? "da" : "nu"} · în coadă: ${info.queued || 0} · probleme: ${info.failed || 0} · ultima sincronizare: ${info.lastSuccessfulSync ? new Date(info.lastSuccessfulSync).toLocaleString("ro-RO") : "niciodată"} · cache: ${cache}`;
+  $("#diagnosticSummary").textContent = `Acțiuni automate: ${info.queuePaused ? "oprite" : "pornite"} · conectare: ${info.online ? "da" : "nu"} · în coadă: ${info.queued || 0} · probleme: ${info.failed || 0} · ultima sincronizare: ${info.lastSuccessfulSync ? new Date(info.lastSuccessfulSync).toLocaleString("ro-RO") : "niciodată"} · cache: ${cache}`;
   if (selectedBookingId && $("#bookingCommands")) $("#bookingCommands").innerHTML = state.commands.filter((command) => command.bookingLocalId === selectedBookingId).map((command) => commandHtml(command, true)).join("") || "Nu există comenzi locale.";
 }
 
 function applyState(next) {
   notifyCommandStateChanges(next.commands);
   state = next;
+  updateWorkspaceUi();
   fillResourceSelects();
   updateTrashedToggle();
   updateSyncUi();
@@ -1986,15 +2048,21 @@ function populateBookingMenu(booking) {
   const approved = booking.status === "approved";
   const statusLabel = approved ? "Aprobată" : "În așteptare";
   const note = String(booking.note || "").trim();
+  const marinaWritable = activeWorkspace !== "marina" || state.settings?.capabilities?.canMutateBookings === true;
   const updated = booking.updatedAt ? new Intl.DateTimeFormat("ro-RO", { dateStyle: "medium", timeStyle: "short", timeZone: configuredTimeZone() }).format(new Date(booking.updatedAt)) : "";
   $("#bookingPaymentMenu").hidden = true;
   $("#bookingPaymentMenuToggle").setAttribute("aria-expanded", "false");
+  $("#bookingPaymentMenuToggle").parentElement.hidden = activeWorkspace === "marina";
+  $("#bookingMenuDuplicate").hidden = activeWorkspace === "marina";
+  $("#bookingMenuEdit").disabled = !marinaWritable;
+  $("#bookingMenuStatus").disabled = !marinaWritable;
+  $("#bookingMenuTrash").disabled = !marinaWritable || (activeWorkspace === "marina" && booking.trashed);
   $("#bookingMenuTitle").textContent = `ID: ${booking.serverId || "local"}`;
   $("#bookingMenuStatus").classList.toggle("is-pending-action", approved);
   $("#bookingMenuStatus").querySelector(".action-label").textContent = approved ? "Pune în așteptare" : "Aprobă";
   $("#bookingMenuStatus").title = approved ? "Pune rezervarea în așteptare" : "Aprobă rezervarea";
-  $("#bookingMenuTrash").querySelector(".action-label").textContent = booking.trashed ? "Restabilește" : "Gunoi";
-  $("#bookingMenuTrash").title = booking.trashed ? "Restabilește rezervarea" : "Mută rezervarea la gunoi";
+  $("#bookingMenuTrash").querySelector(".action-label").textContent = activeWorkspace === "marina" ? "Anulează" : booking.trashed ? "Restabilește" : "Gunoi";
+  $("#bookingMenuTrash").title = activeWorkspace === "marina" ? "Anulează rezervarea Marina" : booking.trashed ? "Restabilește rezervarea" : "Mută rezervarea la gunoi";
   $("#bookingMenuContent").innerHTML = `
     <div class="booking-menu-badges">
       <span class="booking-id-badge">${escapeHtml(String(booking.serverId || "local"))}</span>
@@ -2059,6 +2127,14 @@ function openBookingMenu(booking, anchor) {
   prepareBookingMenuPosition();
   bookingMenu.hidden = false;
   positionBookingMenu(anchorRect);
+  if (activeWorkspace === "marina") {
+    void window.marina.getBooking(booking.localId).then((detailed) => {
+      if (!detailed || activeWorkspace !== "marina" || selectedBookingId !== booking.localId || bookingMenu.hidden) return;
+      state.bookings = state.bookings.map((item) => item.localId === detailed.localId ? detailed : item);
+      populateBookingMenu(detailed);
+      positionBookingMenu(anchorRect);
+    }).catch(showError);
+  }
 }
 
 function dismissBookingMenu() {
@@ -2111,10 +2187,14 @@ function populateDetails(booking, reset = true) {
   bookingMenu.hidden = true;
   const form = $("#detailsForm");
   const approved = booking.status === "approved";
+  const marinaWritable = activeWorkspace !== "marina" || state.settings?.capabilities?.canMutateBookings === true;
   $("#detailsStatus").textContent = approved ? "Pune în așteptare" : "Aprobă";
   $("#detailsStatus").title = approved ? "Pune rezervarea în așteptare" : "Aprobă rezervarea";
   $("#detailsTrash").textContent = booking.trashed ? "Restabilește" : "Gunoi";
-  $("#detailsTrash").title = booking.trashed ? "Restabilește rezervarea" : "Mută rezervarea la gunoi";
+  if (activeWorkspace === "marina") $("#detailsTrash").textContent = "Anulează rezervarea";
+  $("#detailsTrash").title = activeWorkspace === "marina" ? "Anulează rezervarea Marina" : booking.trashed ? "Restabilește rezervarea" : "Mută rezervarea la gunoi";
+  $("#detailsStatus").disabled = !marinaWritable;
+  $("#detailsTrash").disabled = !marinaWritable || (activeWorkspace === "marina" && booking.trashed);
   if (reset) {
     form.reset();
     form.elements.name.value = BookingFields.value(booking, "firstName");
@@ -2524,6 +2604,42 @@ document.querySelector(".workspace-tabs").addEventListener("click", (event) => {
 });
 openAvailability.addEventListener("click", () => setAvailabilityView(!availabilityViewActive));
 $("#closeAvailability").addEventListener("click", () => setAvailabilityView(false));
+$("#marinaSetupAction").addEventListener("click", async () => {
+  if (activeWorkspace !== "marina") return;
+  try {
+    const next = state.settings?.connected ? await window.marina.disconnectMarina() : await window.marina.connectMarina();
+    if (activeWorkspace === "marina") applyState(next);
+  } catch (error) { showError(error); }
+});
+$("#marinaMigrationAction").addEventListener("click", async () => {
+  if (activeWorkspace !== "marina" || marinaMigrationRunning) return;
+  try {
+    const preview = await window.marina.previewMarinaMigration();
+    const message = `Importul va citi numai API-ul WPBooking Camere și va scrie numai în Marina.\n\nResurse: ${preview.resources} (${preview.pendingResources} rămase)\nRezervări: ${preview.bookings} (${preview.pendingBookings} rămase)\nAprobate: ${preview.approved}\nÎn așteptare: ${preview.pending}\nAnulate/gunoi: ${preview.cancelled}\n\nContinui?`;
+    if (!confirm(message)) return;
+    marinaMigrationRunning = true;
+    updateWorkspaceUi();
+    const banner = $("#banner");
+    banner.hidden = false;
+    banner.textContent = "Importul Camere în Marina a început…";
+    const result = await window.marina.runMarinaMigration();
+    banner.textContent = `Import finalizat: ${result.importedResources} resurse și ${result.importedBookings} rezervări.`;
+  } catch (error) { showError(error); }
+  finally {
+    marinaMigrationRunning = false;
+    updateWorkspaceUi();
+  }
+});
+window.marina.onMarinaMigrationProgress?.((status) => {
+  marinaMigrationRunning = Boolean(status?.running);
+  if (activeWorkspace !== "marina") return;
+  updateWorkspaceUi();
+  if (!status?.progress) return;
+  const labels = { resources: "resurse", bookings: "rezervări", complete: "finalizare" };
+  const banner = $("#banner");
+  banner.hidden = false;
+  banner.textContent = `Import Camere: ${labels[status.progress.phase] || status.progress.phase} ${status.progress.completed}/${status.progress.total}.`;
+});
 availabilityGrid.addEventListener("scroll", handleAvailabilityScroll, { passive: true });
 $("#openCreate").addEventListener("click", () => openCreate());
 createDialog.addEventListener("close", () => {
@@ -2849,6 +2965,19 @@ $("#bookingMenuTrash").addEventListener("click", async () => {
 });
 
 $("#syncIndicator").addEventListener("click", () => { diagnostics.hidden = false; });
+$("#pauseQueue").addEventListener("click", async () => {
+  if (!confirm("Oprești toate acțiunile automate? Comanda aflată deja în curs nu mai poate fi retrasă, dar nu vor începe alte trimiteri.")) return;
+  await runExclusive(`pause-queue:${activeWorkspace}`, [$("#pauseQueue")], async () => {
+    try { await runApiAction("pauseQueue"); }
+    catch (error) { showError(error); }
+  });
+});
+$("#resumeQueue").addEventListener("click", async () => {
+  await runExclusive(`resume-queue:${activeWorkspace}`, [$("#resumeQueue")], async () => {
+    try { await runApiAction("resumeQueue"); }
+    catch (error) { showError(error); }
+  });
+});
 $("#clearQueueIssues").addEventListener("click", async () => {
   if (!confirm("Anulezi modificările locale eșuate și comenzile care depind de ele? Rezervările vor reveni la ultima stare cunoscută de pe server.")) return;
   const button = $("#clearQueueIssues");
@@ -2887,6 +3016,12 @@ document.addEventListener("click", async (event) => {
 $("#openSettings").addEventListener("click", async () => {
   cancelDrag();
   const source = activeWorkspace;
+  if (source === "marina") {
+    if (state.settings?.connected && confirm("Deconectezi contul Marina de pe acest dispozitiv?")) {
+      try { applyState(await window.marina.disconnectMarina()); } catch (error) { showError(error); }
+    } else updateMarinaSetupUi();
+    return;
+  }
   const settings = await window.marina.getSettings(source);
   if (source !== activeWorkspace) return;
   settingsWorkspace = source;
@@ -2969,6 +3104,7 @@ $("#today").addEventListener("click", () => setVisibleMonth(monthStart(todayIso(
 $("#refresh").addEventListener("click", () => { void refreshRange({ force: true }); });
 $("#toggleTrashed").addEventListener("click", () => {
   showTrashed = !showTrashed;
+  showTrashedByWorkspace[activeWorkspace] = showTrashed;
   updateTrashedToggle();
   renderTimeline();
 });

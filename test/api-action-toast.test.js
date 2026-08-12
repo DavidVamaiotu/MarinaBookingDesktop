@@ -11,7 +11,7 @@ const markup = fs.readFileSync(path.join(root, "index.html"), "utf8");
 const styles = fs.readFileSync(path.join(root, "styles.css"), "utf8");
 
 test("important API mutations use the shared action toast", () => {
-  for (const method of ["createBooking", "editBooking", "setStatus", "setNote", "setTrash", "updateDeposit", "requestPayment", "retryCommand", "revertBooking", "clearFailedCommands", "testConnection"]) {
+  for (const method of ["createBooking", "editBooking", "setStatus", "setNote", "setTrash", "updateDeposit", "requestPayment", "retryCommand", "revertBooking", "clearFailedCommands", "pauseQueue", "resumeQueue", "testConnection"]) {
     assert.match(renderer, new RegExp(`${method}: \\[".+", ".+"\\]`));
   }
   assert.match(renderer, /const toast = showToast\(pendingMessage, "pending"\)/);

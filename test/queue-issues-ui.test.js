@@ -22,3 +22,11 @@ test("sync indicator shows a red problem-count badge only for queue issues", () 
   assert.match(stylesSource, /\.sync-indicator\.attention::after\{content:attr\(data-issue-count\)/);
   assert.match(stylesSource, /background:#c93632;color:#fff/);
 });
+
+test("desktop exposes persistent stop and resume controls for automatic actions", () => {
+  assert.match(htmlSource, /id="pauseQueue"[^>]*hidden>Oprește acțiunile<\/button>/);
+  assert.match(htmlSource, /id="resumeQueue"[^>]*hidden>Repornește acțiunile<\/button>/);
+  assert.match(appSource, /runApiAction\("pauseQueue"\)/);
+  assert.match(appSource, /runApiAction\("resumeQueue"\)/);
+  assert.match(appSource, /info\.queuePaused \? "Acțiuni oprite"/);
+});

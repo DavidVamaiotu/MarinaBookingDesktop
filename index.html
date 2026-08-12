@@ -14,8 +14,11 @@
       <nav class="workspace-tabs" aria-label="Tip cazare">
         <button class="workspace-tab is-active" data-workspace="rooms" type="button" aria-selected="true">Camere</button>
         <button class="workspace-tab" data-workspace="camping" type="button" aria-selected="false">Camping</button>
+        <button class="workspace-tab" data-workspace="marina" type="button" aria-selected="false">Marina Calendar</button>
       </nav>
       <div class="toolbar-actions">
+        <button class="danger subtle compact" id="pauseQueue" type="button" hidden>Oprește acțiunile</button>
+        <button class="secondary compact" id="resumeQueue" type="button" hidden>Repornește acțiunile</button>
         <button class="sync-indicator" id="syncIndicator" type="button" aria-label="Deschide diagnosticul sincronizării"><span class="status-dot"></span><span id="syncText">Deconectat</span><small id="syncCounts">0 în așteptare</small></button>
         <button class="secondary" id="openSettings" type="button">Setări</button>
         <button class="primary" id="openCreate" type="button">Rezervare nouă</button>
@@ -31,6 +34,7 @@
           <button id="nextMonth" type="button" aria-label="Luna următoare">›</button>
           <button class="secondary compact" id="today" type="button">Astăzi</button>
           <button class="secondary compact" id="refresh" type="button">Actualizează</button>
+          <button class="secondary compact" id="marinaMigrationAction" type="button" hidden>Importă Camere</button>
           <button class="secondary compact" id="toggleTrashed" type="button" aria-pressed="false">Afișează gunoiul</button>
           <button class="secondary compact" id="openAvailability" type="button" aria-pressed="false">Disponibilitate</button>
         </div>
@@ -53,6 +57,19 @@
             <div class="availability-grid" id="availabilityGrid" role="table" aria-label="Disponibilitatea camerelor pe zile"></div>
           </section>
         </div>
+        <section class="marina-setup-panel" id="marinaSetupPanel" aria-labelledby="marinaSetupTitle" hidden>
+          <div class="marina-setup-card">
+            <p>Integrare opțională</p>
+            <h2 id="marinaSetupTitle">Marina Calendar</h2>
+            <p id="marinaSetupDetail">Această sursă este păstrată vizibilă pentru configurare ulterioară.</p>
+            <div class="marina-setup-status" role="status"><span class="status-dot"></span><strong id="marinaSetupStatus">Dezactivat</strong></div>
+            <dl class="marina-setup-facts">
+              <div><dt>API</dt><dd id="marinaSetupApi">https://booking.husi.ro</dd></div>
+              <div><dt>Scope-uri</dt><dd id="marinaSetupScopes">resources:read resources:write bookings:read bookings:write</dd></div>
+            </dl>
+            <button class="secondary" id="marinaSetupAction" type="button" disabled>Conectează Marina</button>
+          </div>
+        </section>
       </div>
     </section>
   </main>

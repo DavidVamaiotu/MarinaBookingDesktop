@@ -18,6 +18,7 @@ test("bump is executable and guards the dual-repository release", () => {
   assert.match(bump, /origin\/main/);
   assert.match(bump, /mobile\/main/);
   assert.match(bump, /npm version/);
+  assert.match(bump, /npm run wordpress:package/);
   assert.match(bump, /versionCode/);
 });
 

@@ -2,6 +2,8 @@
 
 const { EventEmitter } = require("node:events");
 
+const MAX_AUTOMATIC_ATTEMPTS = 2;
+
 function backoffDelay(attempt, random = Math.random) {
   const base = Math.min(5 * 60_000, 1000 * (2 ** Math.max(0, attempt - 1)));
   return Math.round(base * (0.75 + random() * 0.5));
@@ -20,10 +22,24 @@ class CommandQueue extends EventEmitter {
     this.timer = null;
     this.stopped = true;
     this.authPaused = database.diagnostics().authPaused;
+    this.manuallyPaused = database.diagnostics().queuePaused;
   }
 
   start() {
     this.stopped = false;
+    this.schedule(0);
+  }
+
+  pause() {
+    this.manuallyPaused = true;
+    this.database.setMeta("queuePaused", "true");
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+  }
+
+  resume() {
+    this.manuallyPaused = false;
+    this.database.setMeta("queuePaused", "false");
     this.schedule(0);
   }
 
@@ -52,7 +68,7 @@ class CommandQueue extends EventEmitter {
   }
 
   schedule(delay = 1000) {
-    if (this.stopped || this.authPaused || this.timer) return;
+    if (this.stopped || this.authPaused || this.manuallyPaused || this.timer) return;
     this.timer = this.setTimer(() => {
       this.timer = null;
       void this.pump();
@@ -61,7 +77,7 @@ class CommandQueue extends EventEmitter {
   }
 
   async pump() {
-    if (this.stopped || this.authPaused) return;
+    if (this.stopped || this.authPaused || this.manuallyPaused) return;
     const slots = Math.max(0, this.maxConcurrency - this.running.size);
     const ready = this.database.readyCommands().slice(0, slots);
     for (const command of ready) {
@@ -174,6 +190,8 @@ class CommandQueue extends EventEmitter {
   }
 
   async handleFailure(command, error) {
+    const attempt = Number(command.attempts || 0) + 1;
+    const retryLimitReached = attempt >= MAX_AUTOMATIC_ATTEMPTS;
     if (error.code === "endpoint_changed") {
       this.database.markCommand(command.id, "needs_attention", { code: "endpoint_changed", message: error.message });
       return;
@@ -198,13 +216,19 @@ class CommandQueue extends EventEmitter {
           return;
         }
         // v1.0.2 returned a reliable exact-match miss. Retrying the same key is safe.
-        const attempt = Number(command.attempts || 0) + 1;
+        if (retryLimitReached) {
+          this.database.markCommand(command.id, "needs_attention", { code: "automatic_retry_limit_reached", message: "Rezultatul creării este încă necunoscut. Acțiunea a fost oprită după două încercări." });
+          return;
+        }
         this.database.markCommand(command.id, "queued", { code: "create_not_found_after_timeout", message: "Nicio rezervare nu corespunde external_id; se reîncearcă folosind aceeași cheie de idempotență.", availableAt: new Date(Date.now() + backoffDelay(attempt, this.random)).toISOString() });
         return;
       }
     }
     if (error.unknownOutcome && command.idempotency_key) {
-      const attempt = Number(command.attempts || 0) + 1;
+      if (retryLimitReached) {
+        this.database.markCommand(command.id, "needs_attention", { code: "automatic_retry_limit_reached", message: "Rezultatul operației este necunoscut. Acțiunea a fost oprită după două încercări și trebuie verificată manual." });
+        return;
+      }
       this.database.markCommand(command.id, "queued", { code: error.code || "write_outcome_unknown", message: "Rezultatul operației este necunoscut; se reîncearcă folosind aceeași cheie de idempotență.", availableAt: new Date(Date.now() + backoffDelay(attempt, this.random)).toISOString() });
       this.database.setMeta("online", "false");
       return;
@@ -214,7 +238,10 @@ class CommandQueue extends EventEmitter {
       return;
     }
     if (error.temporary || error.rateLimited) {
-      const attempt = Number(command.attempts || 0) + 1;
+      if (retryLimitReached) {
+        this.database.markCommand(command.id, "failed", { code: "automatic_retry_limit_reached", message: `${error.message} Acțiunea a fost oprită după două încercări.`, result: error.payload });
+        return;
+      }
       const delay = error.retryAfter ? error.retryAfter * 1000 : backoffDelay(attempt, this.random);
       this.database.markCommand(command.id, "queued", { code: error.code || "temporary_failure", message: error.message, availableAt: new Date(Date.now() + delay).toISOString() });
       this.database.setMeta("online", error.rateLimited ? "true" : "false");
@@ -224,4 +251,4 @@ class CommandQueue extends EventEmitter {
   }
 }
 
-module.exports = { CommandQueue, backoffDelay };
+module.exports = { CommandQueue, MAX_AUTOMATIC_ATTEMPTS, backoffDelay };

@@ -34,6 +34,12 @@ esbuild.buildSync({
   format: "iife",
   platform: "browser",
   target: ["chrome89"],
+  define: {
+    __MARINA_INTEGRATION_ENABLED__: JSON.stringify(process.env.MARINA_INTEGRATION_ENABLED || "false"),
+    __MARINA_API_BASE_URL__: JSON.stringify(process.env.MARINA_API_BASE_URL || "https://booking.husi.ro"),
+    __MARINA_OAUTH_CLIENT_ID__: JSON.stringify(process.env.MARINA_OAUTH_CLIENT_ID || ""),
+    __MARINA_OAUTH_SCOPES__: JSON.stringify(process.env.MARINA_OAUTH_SCOPES || "resources:read resources:write bookings:read bookings:write")
+  },
   minify: true,
   legalComments: "none"
 });

@@ -198,8 +198,8 @@ class MarinaApiClient {
     }
   }
 
-  async resources({ expectedApiBaseUrl } = {}) {
-    const { payload } = await this.request("/resources", { expectedApiBaseUrl });
+  async resources({ expectedApiBaseUrl, timeoutMs } = {}) {
+    const { payload } = await this.request("/resources", { expectedApiBaseUrl, timeoutMs });
     if (!Array.isArray(payload?.resources)) {
       throw new ApiError("Endpoint-ul resurselor a returnat un format necunoscut; lista locală a fost păstrată.", { code: "invalid_resources_response", permanent: true, payload });
     }
@@ -215,14 +215,22 @@ class MarinaApiClient {
     return payload.resources;
   }
 
-  async bookings(start, end, resourceId = null, { expectedApiBaseUrl } = {}) {
+  async bookings(start, end, resourceId = null, { expectedApiBaseUrl, timeoutMs, maxAttempts = 1 } = {}) {
     const params = new URLSearchParams({ start, end, trash: "any", per_page: "100" });
     if (resourceId) params.set("resource_id", String(resourceId));
     const all = [];
     const pageFingerprints = new Set();
     for (let page = 1; page <= MAX_BOOKING_PAGES; page += 1) {
       params.set("page", String(page));
-      const { payload } = await this.request(`/bookings?${params}`, { expectedApiBaseUrl });
+      let payload;
+      for (let attempt = 1; attempt <= Math.max(1, Number(maxAttempts) || 1); attempt += 1) {
+        try {
+          ({ payload } = await this.request(`/bookings?${params}`, { expectedApiBaseUrl, timeoutMs }));
+          break;
+        } catch (error) {
+          if (attempt >= maxAttempts || !error.temporary) throw error;
+        }
+      }
       const rows = apiBookings(payload);
       const fingerprint = rows.map((row) => String(row.booking_id ?? row.id ?? row.bookingId ?? "")).join(",");
       if (rows.length && pageFingerprints.has(fingerprint)) {

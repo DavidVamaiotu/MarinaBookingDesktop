@@ -659,7 +659,7 @@ class BookingDatabase {
     const counts = Object.fromEntries(this.db.prepare("SELECT status,COUNT(*) count FROM commands WHERE dismissed_at IS NULL GROUP BY status").all().map((row) => [row.status, row.count]));
     const meta = Object.fromEntries(this.db.prepare("SELECT key,value FROM sync_meta").all().map((row) => [row.key, row.value]));
     const cache = this.db.prepare("SELECT start_date AS startDate,end_date AS endDate,loaded_at AS loadedAt FROM loaded_ranges WHERE resource_id=0 ORDER BY loaded_at DESC LIMIT 1").get() || null;
-    return { queued: (counts.queued || 0) + (counts.sending || 0), failed: (counts.failed || 0) + (counts.conflict || 0) + (counts.needs_attention || 0), counts, lastSuccessfulSync: meta.lastSuccessfulSync || null, authPaused: meta.authPaused === "true", cache };
+    return { queued: (counts.queued || 0) + (counts.sending || 0), failed: (counts.failed || 0) + (counts.conflict || 0) + (counts.needs_attention || 0), counts, lastSuccessfulSync: meta.lastSuccessfulSync || null, authPaused: meta.authPaused === "true", queuePaused: meta.queuePaused === "true", cache };
   }
 
   setMeta(key, value) {

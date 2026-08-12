@@ -234,6 +234,7 @@ html,body{width:100%;height:100%;overflow:hidden}*{box-sizing:border-box}body{ma
   .month-controls strong{min-width:0}.month-controls>button{min-height:40px;padding:6px 9px;white-space:nowrap}
   .timeline-camera-viewport{height:auto;max-height:none;min-height:0;border-radius:5px}
   .timeline-shell{height:100%;max-height:100%;min-height:100%;--timeline-unit-width:150px;--timeline-day-width:46px;border-radius:5px;scrollbar-gutter:auto}
+  .marina-setup-panel{min-height:100%;padding:16px 8px}.marina-setup-card{padding:22px 18px}.marina-setup-facts{grid-template-columns:1fr}
   .timeline-scale .timeline-corner{padding-inline:8px}.timeline-unit{padding-inline:8px}.timeline-unit strong{overflow:visible;font-size:10px;text-overflow:clip;white-space:normal;overflow-wrap:anywhere}
   .timeline-bar{min-height:32px}.timeline-bar-guest{font-size:var(--timeline-name-size,12px)}
   .side-panel,.diagnostics,#detailsPanel{inset:0;width:100vw;max-width:none;height:100dvh;padding:max(12px,env(safe-area-inset-top)) 14px max(12px,env(safe-area-inset-bottom))}
@@ -265,6 +266,19 @@ html,body{width:100%;height:100%;overflow:hidden}*{box-sizing:border-box}body{ma
 
 /* Camping has only two short category labels, so its sticky name column can stay compact. */
 .timeline-shell.is-camping-workspace{--timeline-unit-width:112px}
+
+.marina-setup-panel{display:grid;place-items:center;height:100%;min-height:420px;padding:28px;background:linear-gradient(145deg,#f5faf7,#f7f3e9)}
+.marina-setup-card{width:min(620px,100%);display:grid;gap:14px;padding:30px;border:1px solid #cbded3;border-radius:18px;background:rgba(255,255,252,.96);box-shadow:0 12px 36px rgba(44,78,64,.1)}
+.marina-setup-card>p:first-child{margin:0;color:#4b8969;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+.marina-setup-card h2{margin:0;font-size:28px;font-weight:650;color:#263a31}
+.marina-setup-card>p:not(:first-child){margin:0;color:var(--muted);font-size:14px;line-height:1.55}
+.marina-setup-status{display:flex;align-items:center;gap:9px;width:max-content;padding:8px 11px;border-radius:999px;background:#f4ead0;color:#71531a;font-size:12px}
+.marina-setup-status .status-dot{background:#c28a27}
+.marina-setup-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0}
+.marina-setup-facts div{min-width:0;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#faf9f4}
+.marina-setup-facts dt{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em}
+.marina-setup-facts dd{margin:4px 0 0;overflow-wrap:anywhere;color:#34443e;font-size:12px}
+.marina-setup-card button{justify-self:start;cursor:not-allowed;opacity:.58}
 
 /* Separate room availability page. Dates use a bounded, continuously scrolling window. */
 .availability-page{display:grid;grid-template-rows:auto minmax(0,1fr);min-height:0;height:100%;overflow:hidden}

@@ -1,4 +1,10 @@
-# Marina Booking API v1.0.9
+# Marina Booking API v1.0.10
+
+## New in v1.0.10: capacity-aware parent availability
+
+- Checks parent resources such as `Corturi` and `Rulote` together with their Booking Calendar child resources.
+- Keeps single resources such as rooms on the same native availability path without changing their booking behavior.
+- Preserves Booking Calendar's final native allocation and conflict protection during create and edit operations.
 
 ## New in v1.0.9: faster reservation creation
 

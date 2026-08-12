@@ -248,6 +248,18 @@ class BookingService extends EventEmitter {
     this.emitState();
   }
 
+  pauseQueue() {
+    this.queue.pause();
+    this.emitState();
+    return this.state().diagnostics;
+  }
+
+  resumeQueue() {
+    this.queue.resume();
+    this.emitState();
+    return this.state().diagnostics;
+  }
+
   clearFailedCommands() {
     const cleared = this.database.dismissFailedCommands();
     this.emitState();

@@ -163,6 +163,45 @@ test("unknown outcomes for ordinary idempotent writes retry the same command key
   db.close();
 });
 
+test("temporary writes stop after the initial attempt and one automatic retry", async () => {
+  const db = new BookingDatabase(":memory:");
+  const booking = db.upsertRemoteBooking({ serverId: 48, resourceId: 4, dates: ["2026-07-20"], status: "pending", note: "", formData: {} });
+  db.optimisticUpdate(booking.localId, { note: "Nu retrimite la nesfârșit" }, "note");
+  const api = { note: async () => { throw Object.assign(new Error("Server indisponibil"), { code: "http_503", status: 503, temporary: true }); } };
+  const queue = new CommandQueue({ database: db, api, random: () => 0, skipAvailabilityChecks: true });
+  const commandId = db.readyCommands()[0].id;
+
+  await queue.execute(db.getCommand(commandId));
+  assert.equal(db.getCommand(commandId).status, "queued");
+  await queue.execute(db.getCommand(commandId));
+
+  const stored = db.getCommand(commandId);
+  assert.equal(stored.attempts, 2);
+  assert.equal(stored.status, "failed");
+  assert.equal(stored.error_code, "automatic_retry_limit_reached");
+  assert.equal(db.readyCommands().length, 0);
+  db.close();
+});
+
+test("manual queue pause is persistent and resume makes queued work available again", () => {
+  const db = new BookingDatabase(":memory:");
+  create(db);
+  const queue = new CommandQueue({ database: db, api: {} });
+
+  queue.pause();
+  assert.equal(queue.manuallyPaused, true);
+  assert.equal(db.diagnostics().queuePaused, true);
+  const restored = new CommandQueue({ database: db, api: {} });
+  assert.equal(restored.manuallyPaused, true);
+
+  restored.resume();
+  assert.equal(restored.manuallyPaused, false);
+  assert.equal(db.diagnostics().queuePaused, false);
+  assert.equal(db.readyCommands().length, 1);
+  restored.stop();
+  db.close();
+});
+
 test("an idempotency reservation still in progress remains queued instead of becoming a conflict", async () => {
   const db = new BookingDatabase(":memory:");
   const booking = db.upsertRemoteBooking({ serverId: 47, resourceId: 4, dates: ["2026-07-20"], status: "pending", note: "", formData: {} });
@@ -256,6 +295,29 @@ test("payment email waits for its deposit update and uses stable command keys", 
   assert.equal(calls[0].key, deposit.commandId);
   assert.equal(calls[1].key, email.commandId);
   assert.deepEqual(calls[1].payload, payment);
+  db.close();
+});
+
+test("payment email is never attempted automatically more than twice", async () => {
+  const db = new BookingDatabase(":memory:");
+  const booking = remoteBooking(db);
+  const email = db.queuePaymentRequest(booking.localId, { reason: "aBcDeF", nights: 1, start_date: "2026-07-20", end_date: "2026-07-21" });
+  let sends = 0;
+  const api = {
+    payment_request: async () => {
+      sends += 1;
+      throw Object.assign(new Error("Răspunsul trimiterii este necunoscut"), { code: "timeout_unknown", unknownOutcome: true, temporary: true });
+    }
+  };
+  const queue = new CommandQueue({ database: db, api, random: () => 0 });
+
+  await queue.execute(db.getCommand(email.commandId));
+  await queue.execute(db.getCommand(email.commandId));
+
+  assert.equal(sends, 2);
+  assert.equal(db.getCommand(email.commandId).status, "needs_attention");
+  assert.equal(db.getCommand(email.commandId).error_code, "automatic_retry_limit_reached");
+  assert.equal(db.readyCommands().length, 0);
   db.close();
 });
 
