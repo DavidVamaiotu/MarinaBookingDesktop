@@ -103,6 +103,7 @@ test("duplicate UI uses camping parent resources and preserves the rooms exclusi
   assert.match(app, /activeWorkspace === "camping"\s*\?\s*campingParentResources\(\)/);
   assert.match(app, /resource\.active !== false && Number\(resource\.id\) !== Number\(booking\.resourceId\)/);
   assert.match(app, /BookingFields\.duplicateBookingInput\(booking, resource, \{ allowSameResource: source === "camping" \}\)/);
+  assert.match(app, /if \(source === "marina"\) \{[\s\S]*window\.marina\.quoteBooking\(\{[\s\S]*mode: "full"[\s\S]*forceFresh: true[\s\S]*input\.quoteId = quote\.quoteId[\s\S]*input\.note = createPricingNote\(quote\)/);
   assert.match(app, /runApiAction\("createBooking", input\)/);
   assert.doesNotMatch(app, /runApiAction\("editBooking",[^\n]*duplicate/);
 });

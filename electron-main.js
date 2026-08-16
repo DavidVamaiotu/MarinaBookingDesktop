@@ -16,6 +16,7 @@ const { MarinaTokenStore } = require("./src/main/marina-token-store");
 const { MarinaV1ApiClient } = require("./src/main/marina-v1-client");
 const { MarinaBookingProvider } = require("./src/main/marina-provider-service");
 const { MarinaRoomsMigrationService } = require("./src/main/marina-migration-service");
+const { MarinaPublicPricingSource } = require("./src/main/marina-public-pricing");
 const validate = require("./src/main/validation");
 
 app.setName("Marina Booking");
@@ -162,8 +163,8 @@ function registerIpc() {
   ipcMain.handle("booking:status", (_event, source, localId, patch) => { assertWritableSource(source); return contextFor(source).service.update(validate.id(localId, "localId"), validate.bookingPatch(patch), "status"); });
   ipcMain.handle("booking:note", (_event, source, localId, patch) => { assertWritableSource(source); return contextFor(source).service.update(validate.id(localId, "localId"), validate.bookingPatch(patch), "note"); });
   ipcMain.handle("booking:trash", (_event, source, localId, patch) => { assertWritableSource(source); return contextFor(source).service.update(validate.id(localId, "localId"), validate.bookingPatch(patch), "trash"); });
-  ipcMain.handle("booking:payment", (_event, source, localId) => { assertWritableSource(source); return contextFor(source).service.payment(validate.id(localId, "localId")); });
-  ipcMain.handle("booking:deposit", (_event, source, localId, input) => { assertWritableSource(source); return contextFor(source).service.updateDeposit(validate.id(localId, "localId"), validate.deposit(input)); });
+  ipcMain.handle("booking:payment", (_event, source, localId) => { assertReadableSource(source); return contextFor(source).service.payment(validate.id(localId, "localId")); });
+  ipcMain.handle("booking:deposit", (_event, source, localId, input) => { assertWritableSource(source); return contextFor(source).service.updateDeposit(validate.id(localId, "localId"), validate.deposit(input, { requireNote: source !== "marina" })); });
   ipcMain.handle("booking:payment-request", (_event, source, localId, input) => { assertWritableSource(source); return contextFor(source).service.requestPayment(validate.id(localId, "localId"), validate.paymentRequest(input)); });
   ipcMain.handle("booking:availability", (_event, source, input) => {
     assertReadableSource(source);
@@ -356,6 +357,7 @@ async function start() {
       bookings: (start, end) => contexts.rooms.api.bookings(start, end, null, { timeoutMs: 60_000, maxAttempts: 3 })
     },
     targetApi: contexts.marina.api,
+    pricingSource: new MarinaPublicPricingSource(),
     journalStore: migrationStore,
     onProgress: sendMigrationStatus
   });

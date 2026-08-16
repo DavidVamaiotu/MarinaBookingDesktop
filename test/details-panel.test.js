@@ -25,6 +25,7 @@ test("reservation editor keeps the saved note and deposit by default", () => {
   assert.match(indexSource, /id="detailsPriceBalance">—/);
   assert.match(indexSource, /<input name="keepSavedNoteAndDeposit" type="checkbox" checked>/);
   assert.match(indexSource, /Păstrează nota și avansul existente/);
+  assert.match(appSource, /Păstrează nota existentă \(debifează pentru nota de preț\)/);
   assert.doesNotMatch(indexSource, /name="detailsPrice/);
   const calendarSummary = indexSource.indexOf('id="detailsAvailability"');
   const priceSummary = indexSource.indexOf('id="detailsPriceSummary"');
@@ -44,7 +45,7 @@ test("reservation editor reuses the create calendar, availability, and quote flo
 
 test("changing the edited reservation resource retries the preferred dates and remembers confirmed conflicts", () => {
   const handlerStart = appSource.indexOf('$("#detailsForm").elements.resourceId.addEventListener("change"');
-  const handlerEnd = appSource.indexOf('$("#createQuoteDetails").addEventListener', handlerStart);
+  const handlerEnd = appSource.indexOf('$("#createForm").addEventListener("submit"', handlerStart);
   const handlerSource = appSource.slice(handlerStart, handlerEnd);
   assert.ok(handlerStart >= 0 && handlerEnd > handlerStart);
   assert.doesNotMatch(handlerSource, /createSelectionStart = ""/);
@@ -62,6 +63,15 @@ test("changing the edited reservation resource retries the preferred dates and r
   assert.match(availabilitySource, /resetCalendarSelection\(\s*"Datele selectate sunt deja ocupate în noua unitate\./);
   assert.match(availabilitySource, /\{ preserveDetailsSelection: true \}/);
   assert.match(availabilitySource, /excludeBookingId/);
+});
+
+test("new reservation quote summary does not expose the per-date breakdown", () => {
+  assert.match(indexSource, /id="createTotalCost"/);
+  assert.match(indexSource, /id="createDepositCost"/);
+  assert.match(indexSource, /id="createBalanceCost"/);
+  assert.doesNotMatch(indexSource, /createQuoteDetails|createQuoteBreakdown|quote-details-toggle|quote-breakdown/);
+  assert.doesNotMatch(appSource, /renderQuoteBreakdown|createQuoteDetails|createQuoteBreakdown/);
+  assert.doesNotMatch(stylesSource, /quote-details-toggle|quote-breakdown/);
 });
 
 test("reservation editor reference styling remains scoped and responsive", () => {
@@ -187,11 +197,20 @@ test("booking details expose separate queueable deposit and payment-email action
   assert.match(appSource, /requestPayment: \["Se programează emailul de plată…", "Emailul de plată a fost programat\."\]/);
 });
 
+test("Marina keeps the payment menu for Avans while deferring the email action", () => {
+  const start = appSource.indexOf("function populateBookingMenu");
+  const end = appSource.indexOf("function prepareBookingMenuPosition", start);
+  const menuSource = appSource.slice(start, end);
+  assert.match(menuSource, /bookingPaymentMenuToggle[\s\S]*parentElement\.hidden = false/);
+  assert.match(menuSource, /bookingMenuSendPayment[\s\S]*hidden = activeWorkspace === "marina"/);
+});
+
 test("payment popup trusts the WordPress snapshot and shows its note and database deposit", () => {
   assert.match(appSource, /const serverNoteAvailable = typeof snapshot\?\.note === "string"/);
   assert.match(appSource, /const authoritativePaymentAvailable = Boolean\(snapshot && snapshotTotal !== null && databaseDeposit !== null\)/);
   assert.match(appSource, /paymentNoteText"\)\.textContent = note \|\| "Nu există notă\."/);
   assert.match(appSource, /paymentDatabaseDeposit"\)\.textContent = databaseDeposit === null/);
+  assert.match(appSource, /paymentSnapshotLoading\.has\(booking\.localId\)[\s\S]*Verificare eșuată[\s\S]*Indisponibil/);
   assert.match(appSource, /runApiAction\("updateDeposit", booking\.localId, \{ deposit: amount, total, note, source: activeWorkspace \}/);
   assert.doesNotMatch(appSource, /if \(!current\) throw new Error\("Nota rezervării nu conține un Cost valid\."\)/);
 });

@@ -34,15 +34,31 @@ Rooms, Camping, and Marina retain separate stores and IDs. Normal calendar mutat
 to the provider that was active when the operation began; there is no mirroring, dual-write,
 automatic fallback, or customer-data diagnostic logging.
 
-The explicit **Importă Camere** operation is the sole migration exception. It requires all four
-scopes (`resources:read resources:write bookings:read bookings:write`), reads the Rooms WordPress
-API only through `GET /resources` and paginated `GET /bookings`, and writes only to Marina. A
-durable source-ID journal and deterministic idempotency keys make the import resumable without
-duplicating completed resources or bookings. The journal contains only IDs and progress metadata,
-not customer data. When a historical booking references a resource that WordPress no longer lists,
-the importer creates one archived-source resource from the booking's read-only resource label so
-the reservation is preserved instead of discarded.
+The explicit **Importă Camere** operation in the Marina Calendar tab is the sole migration
+exception. It requires all four scopes (`resources:read resources:write bookings:read
+bookings:write`), reads Rooms resources and bookings from WordPress only, and reads prices from the
+allowlisted public page
+`https://www.marinapark.ro/preturi-cazare-camping/`. It never calls the WordPress price calculator
+and writes only to Marina. The public page is parsed for Camera dubla, Camera Cvadrupla, Camera
+dubla in bungalow, Camera dubla in bungalow superior, and Glamping; each published date is
+normalized to integer bani and verified against the generated inclusive Marina seasons before the
+first pricing PUT.
 
-Pricing, deposits, payment status, and payment email remain unavailable in Marina because the
-supplied Marina contract does not define those operations. Resource administration remains hidden
-without `resources:write`.
+A durable source-ID journal, pricing hashes, versions, verification results, and deterministic
+idempotency keys make the import resumable without duplicating completed resources, pricing, or
+bookings. The journal contains IDs and progress metadata, not customer data. After migration,
+Marina quotes, availability, booking writes, and pricing screens use Marina only; there is no
+WordPress pricing fallback. The current public page publishes the 2026 season
+(2026-04-17 through 2026-09-30); dates not published by the page are not invented.
+
+Marina pricing uses `POST /v1/quotes` and quote-bound booking writes. The application displays
+integer-minor totals, a 30% deposit, balance, nights, and the nightly breakdown without copying
+`price_note` into booking notes. The Avans popup reads the server snapshot through
+`GET /v1/bookings/{id}` and reads the booking's authoritative `price` object. A manually selected
+client deposit is stored through the existing idempotent, version-guarded `PATCH /v1/bookings/{id}`
+operation in the namespaced `custom_fields.parkline_manual_deposit_minor` value. It also replaces
+only the canonical pricing line inside `internal_note` (`Cost total`, `Depozit`, `Rest`) and
+preserves all other note text. The popup overlays that per-booking value on the quote snapshot and
+recalculates the displayed balance without mutating Marina's server-authoritative quote pricing.
+Payment-email operations remain intentionally unavailable until their Marina contract is added.
+Resource administration remains hidden without `resources:write`.

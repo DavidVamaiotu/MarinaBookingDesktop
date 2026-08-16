@@ -4,7 +4,12 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { quoteInput } = require("../src/main/validation");
+const { deposit, quoteInput } = require("../src/main/validation");
+
+test("Marina deposit validation does not require a WordPress pricing note", () => {
+  assert.deepEqual(deposit({ deposit: 40, total: 100, note: "" }, { requireNote: false }), { deposit: 40, total: 100, note: "" });
+  assert.throws(() => deposit({ deposit: 40, total: 100, note: "" }), /WordPress/);
+});
 
 test("price preview validation preserves native select and checkbox field types", () => {
   const input = quoteInput({
@@ -62,5 +67,7 @@ test("new reservation pricing prepares a reusable full quote before submit", () 
 test("new reservations generate their note from the confirmed quote", () => {
   const renderer = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
   assert.match(renderer, /return PricingNote\.format\(quote\)/);
+  assert.doesNotMatch(renderer, /activeWorkspace === "marina"\) return ""/);
   assert.match(renderer, /note: createPricingNote\(createQuote\)/);
+  assert.doesNotMatch(renderer, /if \(activeWorkspace === "marina"\) input\.note/);
 });

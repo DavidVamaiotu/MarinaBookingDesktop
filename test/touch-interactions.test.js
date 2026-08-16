@@ -181,8 +181,13 @@ test("client popup uses viewport-safe positioning on phone and Fold widths", () 
 test("opening a client popup cannot read or mutate camera state", () => {
   const openSource = appSource.slice(appSource.indexOf("function openBookingMenu"), appSource.indexOf("function dismissBookingMenu"));
   assert.match(openSource, /const anchorRect = anchor\.getBoundingClientRect\(\)/);
+  assert.ok(
+    openSource.indexOf("populateBookingMenu(booking)") < openSource.indexOf("window.marina.getBooking"),
+    "the cached booking must render before background detail hydration starts"
+  );
   assert.match(openSource, /prepareBookingMenuPosition\(\);\s*bookingMenu\.hidden = false/);
   assert.match(openSource, /positionBookingMenu\(anchorRect\)/);
+  assert.match(openSource, /window\.marina\.getBooking\([\s\S]*\.catch\(\(\) => \{\}\)/);
   assert.doesNotMatch(openSource, /window\.scroll|scrollX|scrollY|cameraScale|cameraOffset|setCamera|requestAnimationFrame/);
   assert.match(indexSource, /<\/main>\s*<div class="overlay-layer" id="overlayLayer">\s*<aside class="booking-menu"/);
 });

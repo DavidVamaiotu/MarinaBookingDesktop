@@ -16,6 +16,7 @@
     [/invalid_email|client_email_missing/i, "Adresa de email a clientului nu este validă."],
     [/payment_email_disabled/i, "Emailurile de plată sunt dezactivate în WordPress."],
     [/payment_unavailable/i, "Cererile de plată nu sunt disponibile în configurația WordPress."],
+    [/marina_stale_version|stale.*version|http_412/i, "Rezervarea Marina a fost modificată între timp. Datele actualizate au fost încărcate; verificați din nou înainte de salvare."],
     [/payment|deposit/i, "Operația de plată nu a putut fi finalizată."],
     [/price|pricing/i, "Prețul rezervării nu a putut fi calculat sau verificat."],
     [/idempotency|write_outcome_unknown|request_in_progress/i, "Operația nu este încă confirmată de WordPress. Aplicația va reîncerca în siguranță."],

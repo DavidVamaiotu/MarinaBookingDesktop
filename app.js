@@ -70,6 +70,11 @@ function updateWorkspaceUi() {
   const marinaMigrationAvailable = typeof window.marina.previewMarinaMigration === "function" && typeof window.marina.runMarinaMigration === "function";
   $("#marinaMigrationAction").hidden = !marinaConnected || !marinaMigrationAvailable;
   $("#marinaMigrationAction").disabled = marinaMigrationRunning || state.settings?.capabilities?.canManageResources !== true || state.settings?.capabilities?.canMutateBookings !== true;
+  const savedPricingLabel = document.querySelector('input[name="keepSavedNoteAndDeposit"]')?.closest("label");
+  if (savedPricingLabel) savedPricingLabel.hidden = false;
+  $("#keepSavedPricingLabel").textContent = marina
+    ? "Păstrează nota existentă (debifează pentru nota de preț)"
+    : "Păstrează nota și avansul existente";
   timelineHeader.hidden = marina && !marinaConnected;
   timelineShell.hidden = marina && !marinaConnected;
   cameraContent.hidden = marina && !marinaConnected;
@@ -1568,10 +1573,12 @@ function invalidateCalendarRequests() {
 function updateCreateSubmitState() {
   const form = calendarForm();
   const currentKey = currentQuoteKey(form);
+  const marinaPricingChanged = activeWorkspace === "marina" && editingDetails() && currentKey !== detailsInitialQuoteKey;
+  const quoteRequired = !editingDetails() || activeWorkspace !== "marina" || marinaPricingChanged;
   const savedDetailsQuoteAvailable = editingDetails()
     && currentKey === detailsInitialQuoteKey
     && Boolean(PricingNote.parse(form.elements.note.value));
-  const currentQuoteAvailable = Boolean(createQuote?.valid && createQuoteKey === currentKey) || savedDetailsQuoteAvailable;
+  const currentQuoteAvailable = !quoteRequired || Boolean(createQuote?.valid && createQuoteKey === currentKey) || savedDetailsQuoteAvailable;
   if (editingDetails()) {
     form.querySelector('[type="submit"]').disabled = !createSelectionEnd
       || availabilityState !== "available"
@@ -1584,7 +1591,6 @@ function updateCreateSubmitState() {
     || availabilityState !== "available"
     || !currentQuoteAvailable
     || quoteState === "calculating";
-  $("#createQuoteDetails").disabled = !createSelectionEnd || !currentQuoteAvailable || quoteState === "calculating";
 }
 
 function invalidateCreateQuote(message = "Se așteaptă calcularea prețului.") {
@@ -1593,7 +1599,6 @@ function invalidateCreateQuote(message = "Se așteaptă calcularea prețului.") 
   quoteState = "stale";
   createQuote = null;
   createQuoteKey = "";
-  if (!editingDetails()) $("#createQuoteBreakdown").hidden = true;
   void window.marina.clearQuoteCache();
   setCreatePricing(message);
   renderCreateSummary();
@@ -1623,7 +1628,7 @@ function renderCreateSummary() {
     dateSummary.innerHTML = "Date: <span>…</span> – <span>…</span> nopți";
   }
   if (editingDetails()) {
-    if (createQuote?.valid) renderDetailsPrice(createPricingNote(createQuote));
+    if (createQuote?.valid) renderDetailsPrice(createPricingNote(createQuote), createQuote);
     else renderDetailsPrice(form.elements.note.value);
   } else {
     $("#createTotalCost").textContent = createQuote ? formatCreateMoney(createQuote.total, createQuote.formatted?.total) : "—";
@@ -1777,7 +1782,7 @@ function openDuplicate(booking) {
 }
 
 function formBookingInput(form) {
-  return {
+  const input = {
     resourceId: Number(form.elements.resourceId.value),
     dates: rangeDates(form.elements.start.value, form.elements.end.value),
     formData: {
@@ -1790,28 +1795,11 @@ function formBookingInput(form) {
     },
     bookingFormType: selectedResource()?.defaultForm || "",
     note: createPricingNote(createQuote),
+    ...(activeWorkspace === "marina" && createQuote?.quoteId ? { quoteId: createQuote.quoteId } : {}),
     approved: Boolean(form.elements.approved?.checked),
     sendEmail: Boolean(form.elements.sendEmail.checked)
   };
-}
-
-function renderQuoteBreakdown() {
-  const output = $("#createQuoteBreakdown");
-  if (!createQuote || createQuote.mode !== "full") {
-    output.innerHTML = "";
-    return;
-  }
-  const formatted = createQuote.formatted || {};
-  const rows = [
-    ["Preț inițial", formatCreateMoney(createQuote.original_cost, formatted.original_cost)],
-    ["Cost suplimentar", formatCreateMoney(createQuote.additional_cost, formatted.additional_cost)],
-    ["Reducere cupon", formatCreateMoney(createQuote.coupon_discount, formatted.coupon_discount)],
-    ["Total", formatCreateMoney(createQuote.total, formatted.total)],
-    ["Avans", formatCreateMoney(createQuote.deposit, formatted.deposit)],
-    ["Rest", formatCreateMoney(createQuote.balance, formatted.balance)],
-    ["Zile / nopți", `${Number(createQuote.days) || 0} / ${Number(createQuote.nights) || 0}`]
-  ];
-  output.innerHTML = rows.map(([label, value]) => `<span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong>`).join("");
+  return input;
 }
 
 async function fetchCreateQuote(requestId, key, { mode = "fast", forceFresh = false, source = activeWorkspace } = {}) {
@@ -1836,14 +1824,16 @@ async function fetchCreateQuote(requestId, key, { mode = "fast", forceFresh = fa
     createQuote = { ...displayedQuote, valid: true };
     createQuoteKey = key;
     createQuoteConfirmedAt = Date.now();
-    setCreatePricing(mode === "full" ? "Preț complet confirmat de Booking Calendar." : "Preț calculat de Booking Calendar.", "available");
-    if (!editingDetails()) renderQuoteBreakdown();
+    const providerLabel = source === "marina" ? "Marina" : "Booking Calendar";
+    setCreatePricing(mode === "full" ? `Preț complet confirmat de ${providerLabel}.` : `Preț calculat de ${providerLabel}.`, "available");
     renderCreateSummary();
     return true;
   } catch (error) {
     if (source !== activeWorkspace || requestId !== quoteRequestId || key !== currentQuoteKey(form)) return false;
     quoteState = "error";
-    const unavailable = error?.code === "rest_no_route"
+    const unavailable = source === "marina"
+      ? "Prețul Marina nu a putut fi calculat. Verificați conexiunea și configurarea prețurilor."
+      : error?.code === "rest_no_route"
       ? "Actualizați Marina Booking API la versiunea 1.0.4 pentru calcularea prețului."
       : error?.permanent && error?.message
         ? ErrorMessages.message(error, "Prețul nou nu a putut fi calculat.")
@@ -1869,7 +1859,6 @@ function schedulePriceCheck() {
     return;
   }
   quoteState = "stale";
-  if (!editingDetails()) $("#createQuoteBreakdown").hidden = true;
   setCreatePricing("Prețul afișat trebuie actualizat…");
   renderCreateSummary();
   const source = activeWorkspace;
@@ -1880,13 +1869,15 @@ async function refreshPriceNow({ forceFresh = true } = {}) {
   clearTimeout(quoteTimer);
   const key = currentQuoteKey(calendarForm());
   if (!key) return false;
+  const marinaExpiresAt = activeWorkspace === "marina" ? Date.parse(String(createQuote?.expiresAt || createQuote?.expires_at || "")) : NaN;
+  const marinaFreshEnough = Number.isFinite(marinaExpiresAt) && marinaExpiresAt > Date.now() + 30_000;
   if (
     !editingDetails()
     && quoteState === "fresh"
     && createQuote?.valid
     && createQuote.mode === "full"
     && createQuoteKey === key
-    && Date.now() - createQuoteConfirmedAt < 15_000
+    && (activeWorkspace === "marina" ? (!forceFresh && marinaFreshEnough) : Date.now() - createQuoteConfirmedAt < 15_000)
   ) return true;
   const requestId = ++quoteRequestId;
   return fetchCreateQuote(requestId, key, { mode: "full", forceFresh, source: activeWorkspace });
@@ -1926,7 +1917,20 @@ function scheduleAvailabilityCheck({ resetSelectionOnUnavailable = false } = {})
     const end = form.elements.end.value;
     const source = activeWorkspace;
     const booking = editingDetails() ? bookingById(selectedBookingId) : null;
-    const excludeBookingId = booking?.serverId || null;
+    const excludeBookingId = booking && source !== "marina" ? booking.serverId : null;
+    const currentRange = booking ? normalizedBookingDateRange(booking) : null;
+    const marinaSelfOverlap = source === "marina"
+      && booking
+      && Number(booking.resourceId) === resourceId
+      && currentRange?.valid
+      && start < currentRange.end
+      && currentRange.start < end;
+    if (marinaSelfOverlap) {
+      availabilityState = "available";
+      setCreateAvailability("Intervalul rezervării curente va fi verificat definitiv la salvare.", "available");
+      updateCreateSubmitState();
+      return;
+    }
     availabilityState = "checking";
     setCreateAvailability("Se verifică disponibilitatea…");
     updateCreateSubmitState();
@@ -1944,10 +1948,10 @@ function scheduleAvailabilityCheck({ resetSelectionOnUnavailable = false } = {})
       availabilityState = result.available ? "available" : "unavailable";
       setCreateAvailability(result.available ? "Datele sunt disponibile." : "Datele nu mai sunt disponibile.", result.available ? "available" : "unavailable");
       updateCreateSubmitState();
-    } catch {
+    } catch (error) {
       if (source !== activeWorkspace || requestId !== availabilityRequestId || Number(form.elements.resourceId.value) !== resourceId || form.elements.start.value !== start || form.elements.end.value !== end) return;
       availabilityState = "error";
-      setCreateAvailability("Verificarea online nu este disponibilă. Rezervarea nu poate fi trimisă.", "unavailable");
+      setCreateAvailability(ErrorMessages.message(error, "Verificarea online nu este disponibilă. Rezervarea nu poate fi trimisă."), "unavailable");
       updateCreateSubmitState();
     }
   }, 300);
@@ -2052,7 +2056,8 @@ function populateBookingMenu(booking) {
   const updated = booking.updatedAt ? new Intl.DateTimeFormat("ro-RO", { dateStyle: "medium", timeStyle: "short", timeZone: configuredTimeZone() }).format(new Date(booking.updatedAt)) : "";
   $("#bookingPaymentMenu").hidden = true;
   $("#bookingPaymentMenuToggle").setAttribute("aria-expanded", "false");
-  $("#bookingPaymentMenuToggle").parentElement.hidden = activeWorkspace === "marina";
+  $("#bookingPaymentMenuToggle").parentElement.hidden = false;
+  $("#bookingMenuSendPayment").hidden = activeWorkspace === "marina";
   $("#bookingMenuDuplicate").hidden = activeWorkspace === "marina";
   $("#bookingMenuEdit").disabled = !marinaWritable;
   $("#bookingMenuStatus").disabled = !marinaWritable;
@@ -2133,7 +2138,7 @@ function openBookingMenu(booking, anchor) {
       state.bookings = state.bookings.map((item) => item.localId === detailed.localId ? detailed : item);
       populateBookingMenu(detailed);
       positionBookingMenu(anchorRect);
-    }).catch(showError);
+    }).catch(() => {});
   }
 }
 
@@ -2247,22 +2252,25 @@ function populateDetails(booking, reset = true) {
     renderCreateCalendar();
     if (initialDates.valid && quoteState === "stale") schedulePriceCheck();
   }
-  renderDetailsPrice(createQuote?.valid ? createPricingNote(createQuote) : form.elements.note.value);
+  renderDetailsPrice(createQuote?.valid ? createPricingNote(createQuote) : form.elements.note.value, createQuote);
   const clientName = [BookingFields.value(booking, "firstName"), BookingFields.value(booking, "lastName")].filter(Boolean).join(" ").trim();
   $("#detailsTitle").textContent = clientName || `Rezervarea ${booking.serverId || "locală"}`;
   renderCommands();
   detailsPanel.hidden = false;
 }
 
-function renderDetailsPrice(note) {
-  const pricing = PricingNote.parse(note);
-  const values = pricing
-    ? [pricing.total, pricing.deposit, pricing.balance].map((value) => `${PricingNote.formatAmount(value)} RON`)
-    : ["—", "—", "—"];
+function renderDetailsPrice(note, quote = null) {
+  const marinaQuote = activeWorkspace === "marina" && quote?.valid ? quote : null;
+  const pricing = marinaQuote ? null : PricingNote.parse(note);
+  const values = marinaQuote
+    ? [marinaQuote.total, marinaQuote.deposit, marinaQuote.balance].map((value) => `${formatCreateMoney(value).replace(/\s*lei$/i, "")} RON`)
+    : pricing
+      ? [pricing.total, pricing.deposit, pricing.balance].map((value) => `${PricingNote.formatAmount(value)} RON`)
+      : ["—", "—", "—"];
   $("#detailsPriceTotal").textContent = values[0];
   $("#detailsPriceDeposit").textContent = values[1];
   $("#detailsPriceBalance").textContent = values[2];
-  $("#detailsPriceSummary").classList.toggle("is-unavailable", !pricing);
+  $("#detailsPriceSummary").classList.toggle("is-unavailable", !pricing && !marinaQuote);
 }
 
 function populatePaymentDialog(booking, reset = true) {
@@ -2311,6 +2319,7 @@ function paymentAmount(value) {
 
 function renderPaymentSection(booking, reset = false) {
   const form = $("#paymentForm");
+  const paymentSourceLabel = activeWorkspace === "marina" ? "Marina" : "WordPress";
   const depositCommand = unresolvedPaymentCommand(booking, "deposit_update");
   const emailCommand = unresolvedPaymentCommand(booking, "payment_request");
   const snapshot = paymentSnapshots.get(booking.localId);
@@ -2335,9 +2344,17 @@ function renderPaymentSection(booking, reset = false) {
   $("#paymentBalanceBadge").textContent = amountsAvailable ? `${PricingNote.formatAmount(balance)} lei` : "—";
   $("#paymentPaidBadge").textContent = deposit > 0 ? "Avans" : "Avans neplătit";
   $("#paymentPaidBadge").closest(".payment-badge").classList.toggle("is-unpaid", !(deposit > 0));
-  $("#paymentNoteLabel").textContent = serverNoteAvailable ? "Notă WordPress" : "Notă locală";
+  $("#paymentNoteLabel").textContent = serverNoteAvailable ? `Notă ${paymentSourceLabel}` : "Notă locală";
   $("#paymentNoteText").textContent = note || "Nu există notă.";
-  $("#paymentDatabaseDeposit").textContent = databaseDeposit === null ? "Se verifică…" : `${PricingNote.formatAmount(databaseDeposit)} lei`;
+  const paymentDatabaseLabel = $("#paymentDatabaseDeposit").parentElement?.querySelector("strong");
+  if (paymentDatabaseLabel) paymentDatabaseLabel.textContent = activeWorkspace === "marina" ? "Avans în API-ul Marina" : "Avans în baza de date WordPress";
+  $("#paymentDatabaseDeposit").textContent = databaseDeposit === null
+    ? paymentSnapshotLoading.has(booking.localId)
+      ? "Se verifică…"
+      : snapshotError
+        ? "Verificare eșuată"
+        : "Indisponibil"
+    : `${PricingNote.formatAmount(databaseDeposit)} lei`;
   $("#saveDeposit").disabled = !authoritativePaymentAvailable || !booking.serverId || Boolean(depositCommand || emailCommand);
   const email = BookingFields.value(booking, "email") || snapshot?.email;
   const verifiedForEmail = pendingDeposit || (authoritativePaymentAvailable && snapshot.email_available !== false);
@@ -2348,9 +2365,9 @@ function renderPaymentSection(booking, reset = false) {
   else if (depositCommand) status = depositCommand.status === "queued" ? "Avans salvat în coadă." : depositCommand.errorMessage ? ErrorMessages.message(depositCommand.errorMessage) : `Avans: ${displayStatus(depositCommand.status)}.`;
   else if (paymentSnapshotLoading.has(booking.localId)) status = "Se verifică suma nativă de plată…";
   else if (snapshotError) status = `Suma nativă nu a putut fi verificată: ${snapshotError}`;
-  else if (!authoritativePaymentAvailable) status = "WordPress nu a returnat un cost și un avans valide.";
+  else if (!authoritativePaymentAvailable) status = `${paymentSourceLabel} nu a returnat un cost și un avans valide.`;
   else if (!email) status = "Rezervarea nu are o adresă de email. Adaugă emailul în Detalii rezervare.";
-  else if (snapshot?.email_available === false) status = "Emailurile de plată nu sunt disponibile în configurația WordPress.";
+  else if (snapshot?.email_available === false) status = activeWorkspace === "marina" ? "Emailurile de plată Marina vor fi adăugate ulterior." : "Emailurile de plată nu sunt disponibile în configurația WordPress.";
   $("#paymentStatus").textContent = status;
 }
 
@@ -2548,9 +2565,9 @@ async function endDrag(event) {
   try {
     const bookingFormType = resourceById(completed.booking.resourceId)?.defaultForm || "";
     const formData = BookingFields.prepareFormData(completed.booking.formData, completed.booking.resourceId);
-    requireValidQuote(await window.marina.quoteBooking({ resourceId: completed.booking.resourceId, sourceResourceId: completed.booking.resourceId, dates: completed.booking.dates, formData, bookingFormType, mode: "full", forceFresh: true, source }));
+    const quote = requireValidQuote(await window.marina.quoteBooking({ resourceId: completed.booking.resourceId, sourceResourceId: completed.booking.resourceId, dates: completed.booking.dates, formData, bookingFormType, mode: "full", forceFresh: true, source }));
     if (source !== activeWorkspace) throw workspaceChangedError();
-    await runApiAction("editBooking", completed.booking.localId, { dates: completed.booking.dates, resourceId: completed.booking.resourceId, sourceResourceId: completed.booking.resourceId, formData, bookingFormType, source });
+    await runApiAction("editBooking", completed.booking.localId, { dates: completed.booking.dates, resourceId: completed.booking.resourceId, sourceResourceId: completed.booking.resourceId, formData, bookingFormType, ...(source === "marina" && quote.quoteId ? { quoteId: quote.quoteId } : {}), source });
     renderTimeline();
     void refreshRange({ force: false, quiet: true });
   } catch (error) {
@@ -2615,15 +2632,22 @@ $("#marinaMigrationAction").addEventListener("click", async () => {
   if (activeWorkspace !== "marina" || marinaMigrationRunning) return;
   try {
     const preview = await window.marina.previewMarinaMigration();
-    const message = `Importul va citi numai API-ul WPBooking Camere și va scrie numai în Marina.\n\nResurse: ${preview.resources} (${preview.pendingResources} rămase)\nRezervări: ${preview.bookings} (${preview.pendingBookings} rămase)\nAprobate: ${preview.approved}\nÎn așteptare: ${preview.pending}\nAnulate/gunoi: ${preview.cancelled}\n\nContinui?`;
+    const pricingSummary = preview.pricingSource
+      ? `\nPrețuri: ${preview.pricingResources} resurse din pagina publică Marina (${preview.pricingCoverage?.from || "?"} – ${preview.pricingCoverage?.to || "?"})${preview.pricingWarnings?.length ? `\nAvertismente prețuri: ${preview.pricingWarnings.length}` : ""}`
+      : "";
+    const warningSummary = preview.pricingWarnings?.length ? `\n\nAvertismente:\n${preview.pricingWarnings.slice(0, 8).map((warning) => `- ${warning}`).join("\n")}${preview.pricingWarnings.length > 8 ? "\n- …" : ""}` : "";
+    const message = `Importul va citi numai resursele și rezervările WPBooking și pagina publică de prețuri Marina, apoi va scrie numai în Marina.\n\nResurse: ${preview.resources} (${preview.pendingResources} rămase)\nRezervări: ${preview.bookings} (${preview.pendingBookings} rămase)\nAprobate: ${preview.approved}\nÎn așteptare: ${preview.pending}\nAnulate/gunoi: ${preview.cancelled}${pricingSummary}${warningSummary}\n\nContinui?`;
     if (!confirm(message)) return;
     marinaMigrationRunning = true;
     updateWorkspaceUi();
     const banner = $("#banner");
     banner.hidden = false;
-    banner.textContent = "Importul Camere în Marina a început…";
+    banner.textContent = "Importul Camere și prețurile Marina au început…";
     const result = await window.marina.runMarinaMigration();
-    banner.textContent = `Import finalizat: ${result.importedResources} resurse și ${result.importedBookings} rezervări.`;
+    const pricingReport = Array.isArray(result.pricingReport) ? result.pricingReport : [];
+    const pricingFailures = pricingReport.filter((item) => item.error).length;
+    const pricingSkipped = pricingReport.filter((item) => item.skippedWrite).length;
+    banner.textContent = `Import finalizat: ${result.importedResources} resurse, ${result.importedBookings} rezervări și ${result.importedPricing || 0} configurații de preț.${pricingReport.length ? ` Prețuri verificate: ${pricingReport.length - pricingFailures}; fără PUT nou: ${pricingSkipped}; erori: ${pricingFailures}.` : ""}`;
   } catch (error) { showError(error); }
   finally {
     marinaMigrationRunning = false;
@@ -2635,7 +2659,7 @@ window.marina.onMarinaMigrationProgress?.((status) => {
   if (activeWorkspace !== "marina") return;
   updateWorkspaceUi();
   if (!status?.progress) return;
-  const labels = { resources: "resurse", bookings: "rezervări", complete: "finalizare" };
+  const labels = { "pricing-extract": "extragere prețuri", "pricing-validation": "validare prețuri", "pricing-publish": "publicare prețuri", "pricing-verify": "verificare prețuri", resources: "resurse", bookings: "rezervări", complete: "finalizare" };
   const banner = $("#banner");
   banner.hidden = false;
   banner.textContent = `Import Camere: ${labels[status.progress.phase] || status.progress.phase} ${status.progress.completed}/${status.progress.total}.`;
@@ -2691,15 +2715,6 @@ $("#detailsForm").elements.resourceId.addEventListener("change", () => {
   scheduleAvailabilityCheck({ resetSelectionOnUnavailable: true });
   schedulePriceCheck();
 });
-$("#createQuoteDetails").addEventListener("click", async () => {
-  const breakdown = $("#createQuoteBreakdown");
-  if (!breakdown.hidden) {
-    breakdown.hidden = true;
-    return;
-  }
-  breakdown.hidden = false;
-  if (!await refreshPriceNow({ forceFresh: false })) breakdown.hidden = true;
-});
 $("#createForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -2739,17 +2754,27 @@ async function saveBookingDetails(booking, form) {
     const bookingFormType = resourceById(resourceId)?.defaultForm || "";
     const pricingChanged = currentQuoteKey(form) !== detailsInitialQuoteKey;
     const replaceNoteAndDeposit = !form.elements.keepSavedNoteAndDeposit.checked;
+    const marina = source === "marina";
     if (availabilityState !== "available") throw Object.assign(new Error("Disponibilitatea trebuie confirmată înainte de salvare."), { code: "availability_unconfirmed", permanent: true });
-    if ((pricingChanged || replaceNoteAndDeposit) && !await refreshPriceNow({ forceFresh: true })) return;
+    const needsMarinaQuote = marina && (pricingChanged || replaceNoteAndDeposit);
+    if ((marina ? needsMarinaQuote : pricingChanged || replaceNoteAndDeposit) && !await refreshPriceNow({ forceFresh: true })) return;
     const recalculatedQuote = replaceNoteAndDeposit ? normalizedRecalculatedQuote(createQuote) : null;
     const note = replaceNoteAndDeposit
-      ? recalculatedBookingNote(recalculatedQuote, form.elements.note.value)
+      ? marina
+        ? PricingNote.update(form.elements.note.value, recalculatedQuote.deposit, recalculatedQuote.total).note
+        : recalculatedBookingNote(recalculatedQuote, form.elements.note.value)
       : form.elements.note.value;
     if (source !== activeWorkspace || selectedBookingId !== booking.localId) throw workspaceChangedError();
     const formData = detailsFormData(booking, form);
     const outboundFormData = BookingFields.prepareFormData(formData, booking.resourceId);
-    const savedBooking = await runApiAction("editBooking", booking.localId, { resourceId, sourceResourceId: booking.resourceId, dates, formData: outboundFormData, bookingFormType, note, sendEmail: Boolean(form.elements.sendEmail.checked), source });
-    if (recalculatedQuote) {
+    const editInput = { resourceId, sourceResourceId: booking.resourceId, dates, formData: outboundFormData, bookingFormType, note, sendEmail: Boolean(form.elements.sendEmail.checked), source };
+    if (marina && pricingChanged && createQuote?.quoteId) editInput.quoteId = createQuote.quoteId;
+    const savedBooking = await runApiAction("editBooking", booking.localId, editInput);
+    if (marina && (pricingChanged || replaceNoteAndDeposit || String(note) !== String(booking.note || ""))) {
+      paymentSnapshots.delete(booking.localId);
+      paymentSnapshotErrors.delete(booking.localId);
+    }
+    if (recalculatedQuote && !marina) {
       const confirmedNote = typeof savedBooking?.note === "string" ? savedBooking.note : note;
       form.elements.note.value = confirmedNote;
       paymentSnapshots.delete(booking.localId);
@@ -2759,6 +2784,22 @@ async function saveBookingDetails(booking, form) {
     }
     if (source === activeWorkspace && selectedBookingId === booking.localId && selectedBookingView === "edit") closeBookingOverlays();
   });
+}
+
+async function openBookingDetails(localId) {
+  const source = activeWorkspace;
+  const cached = bookingById(localId);
+  if (!cached) throw new Error("Rezervarea nu a mai fost găsită. Reîncarcă lista și încearcă din nou.");
+  selectedBookingId = cached.localId;
+  if (source !== "marina") {
+    populateDetails(cached);
+    return;
+  }
+  // The Marina calendar already has a locally cached booking from the range
+  // refresh. Render that immediately; details and notes revalidation must not
+  // delay opening the editor.
+  populateDetails(cached);
+  void window.marina.getBooking(cached.localId).catch(() => {});
 }
 
 $("#detailsForm").addEventListener("submit", async (event) => {
@@ -2818,7 +2859,7 @@ $("#saveDeposit").addEventListener("click", async () => {
     const snapshot = paymentSnapshots.get(booking.localId);
     const total = paymentAmount(snapshot?.total);
     const note = typeof snapshot?.note === "string" ? snapshot.note : String(booking.note || "");
-    if (!snapshot || total === null) throw new Error("Așteaptă verificarea costului din WordPress înainte de salvarea avansului.");
+    if (!snapshot || total === null) throw new Error(`Așteaptă verificarea costului din ${activeWorkspace === "marina" ? "Marina" : "WordPress"} înainte de salvarea avansului.`);
     if (!Number.isFinite(amount) || amount < 0 || amount > total) throw new Error("Avansul trebuie să fie între zero și costul rezervării.");
     paymentSnapshots.delete(booking.localId);
     paymentSnapshotErrors.delete(booking.localId);
@@ -2862,9 +2903,13 @@ $("#sendPaymentRequest").addEventListener("click", async () => {
   } catch (error) { showError(error); }
 });
 
-$("#bookingMenuEdit").addEventListener("click", () => {
+$("#bookingMenuEdit").addEventListener("click", async () => {
   const booking = bookingById(selectedBookingId);
-  if (booking) populateDetails(booking);
+  if (!booking) return;
+  await runExclusive(`booking-details:${activeWorkspace}:${booking.localId}`, [$("#bookingMenuEdit")], async () => {
+    try { await openBookingDetails(booking.localId); }
+    catch (error) { showError(error); }
+  });
 });
 
 $("#bookingMenuDuplicate").addEventListener("click", () => {
@@ -2899,6 +2944,17 @@ $("#duplicateForm").addEventListener("submit", async (event) => {
     return;
   }
   await runExclusive(`create:${source}`, [$("#duplicateSubmit")], async () => { try {
+    if (source === "marina") {
+      const quote = requireValidQuote(await window.marina.quoteBooking({
+        ...input,
+        mode: "full",
+        forceFresh: true,
+        source
+      }));
+      if (!quote.quoteId) throw Object.assign(new Error("Marina nu a returnat o cotație validă pentru duplicare."), { code: "marina_invalid_quote", permanent: true });
+      input.quoteId = quote.quoteId;
+      input.note = createPricingNote(quote);
+    }
     duplicateDialog.close();
     const created = await runApiAction("createBooking", input);
     await waitForCreatedBooking(created, input, source);
@@ -3009,7 +3065,11 @@ document.addEventListener("click", async (event) => {
   const open = event.target.closest("[data-open-booking]");
   if (open) {
     const booking = bookingById(open.dataset.openBooking);
-    if (booking) { diagnostics.hidden = true; populateDetails(booking); }
+    if (booking) {
+      diagnostics.hidden = true;
+      try { await openBookingDetails(booking.localId); }
+      catch (error) { showError(error); }
+    }
   }
 });
 

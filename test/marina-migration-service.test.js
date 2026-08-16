@@ -39,6 +39,7 @@ function harness({ failStateOnce = false, initialJournal = {} } = {}) {
     async createResource(body, key) { targetCalls.push(["createResource", body, key]); return { payload: { data: { id: 101 + targetCalls.filter((call) => call[0] === "createResource").length } } }; },
     async deleteResource(id, key) { targetCalls.push(["deleteResource", id, key]); return { payload: {} }; },
     async createBooking(body, key) { targetCalls.push(["createBooking", body, key]); return { payload: { data: { id: "target-booking" } } }; },
+    async updateBooking(id, body, key, version) { targetCalls.push(["updateBooking", id, body, key, version]); return { payload: {} }; },
     async changeBookingStatus(id, body, key, version) {
       targetCalls.push(["changeBookingStatus", id, body, key, version]);
       if (stateFailures-- > 0) throw new Error("temporary status failure");
@@ -60,8 +61,10 @@ test("migration journals capacity conflicts and continues importing later bookin
   const { service, data, targetCalls, stored } = harness();
   data.bookings.push({ ...structuredClone(data.bookings[0]), serverId: 92 });
   const originalCreate = service.targetApi.createBooking;
+  let creates = 0;
   service.targetApi.createBooking = async (body, key) => {
-    if (body.external.booking_id === "91") throw Object.assign(new Error("capacity_exceeded"), { status: 409, conflict: true, code: "availability_conflict" });
+    creates += 1;
+    if (creates === 1) throw Object.assign(new Error("capacity_exceeded"), { status: 409, conflict: true, code: "availability_conflict" });
     return originalCreate(body, key);
   };
   const result = await service.run();
@@ -107,6 +110,40 @@ test("future conflicts are preserved with a nonblocking target status", async ()
   assert.equal(stored().bookings["91"].availabilityConflictImported, true);
 });
 
+test("quote-backed conflict retries use matching date periods and fresh idempotency keys", async () => {
+  const { service, stored } = harness();
+  const calls = [];
+  let quoteNumber = 0;
+  service.targetApi.quote = async (body) => {
+    quoteNumber += 1;
+    calls.push(["quote", structuredClone(body), `quote-${quoteNumber}`]);
+    return { payload: { data: { quote_id: `quote-${quoteNumber}` } } };
+  };
+  service.targetApi.createBooking = async (body, key) => {
+    calls.push(["createBooking", structuredClone(body), key]);
+    if (calls.filter((call) => call[0] === "createBooking").length <= 2) {
+      throw Object.assign(new Error("capacity_exceeded"), { status: 409, conflict: true, code: "availability_conflict" });
+    }
+    return { payload: { data: { id: "quoted-conflict-target" } } };
+  };
+
+  await service.run();
+  await service.run();
+
+  const creates = calls.filter((call) => call[0] === "createBooking");
+  assert.equal(creates.length, 3);
+  assert.deepEqual(creates.map((call) => call[1].periods), [
+    [{ start_date: "2026-08-11", end_date: "2026-08-11", units: 1 }],
+    [{ start_date: "2026-08-11", end_date: "2026-08-11", units: 1 }],
+    [{ start_date: "2026-08-11", end_date: "2026-08-11", units: 1 }]
+  ]);
+  assert.deepEqual(creates.map((call) => call[1].quote_id), ["quote-1", "quote-2", "quote-3"]);
+  assert.equal(new Set(creates.map((call) => call[2])).size, 3);
+  assert.equal(creates[2][1].status, "completed");
+  assert.equal(stored().bookings["91"].targetId, "quoted-conflict-target");
+  assert.equal(stored().bookings["91"].availabilityConflictImported, true);
+});
+
 test("migration reads only source resources and bookings and writes all data to Marina", async () => {
   const { service, sourceCalls, targetCalls } = harness();
   const preview = await service.preview();
@@ -128,14 +165,85 @@ test("migration reads only source resources and bookings and writes all data to 
   });
   assert.equal(targetCalls[1][0], "createBooking");
   assert.deepEqual(targetCalls[1][1], {
-    resource_id: 102, periods: [{ start_date: "2026-08-11", end_date: "2026-08-12", units: 1 }],
-    customer: { first_name: "Ana", last_name: "Pop", email: "ana@example.test", phone: "0700000000", address: {}, custom_fields: {} },
-    guests: { adults: 2, children: 1, details: {} },
-    status: "approved", custom_fields: {},
-    internal_note: "Importat din WPBooking Camere. ID sursă: 91.\nSosire târzie\nCost sursă: 500 RON\nAvans sursă: 100 RON",
-    external: { client_id: "wpbooking-rooms", booking_id: "91" }
+    resource_id: 102, periods: [{ start_date: "2026-08-11", end_date: "2026-08-11", units: 1 }],
+    customer: { first_name: "Ana", last_name: "Pop", email: "ana@example.test", phone: "0700000000", address: {}, custom_fields: { cost_hint: "500 RON", deposit_hint: "100 RON" } },
+    guests: { adults: 2, children: 1 }
   });
-  assert.deepEqual(targetCalls.map((call) => call[0]), ["createResource", "createBooking"]);
+  assert.deepEqual(targetCalls.map((call) => call[0]), ["createResource", "createBooking", "updateBooking", "changeBookingStatus"]);
+});
+
+test("migration preserves non-standard WordPress client fields in Marina customer custom fields", () => {
+  const booking = fixture().bookings[0];
+  booking.formData.address6 = { value: "Str. Exemplu 1", type: "text" };
+  booking.formData.cerere_client6 = { value: "Cameră liniștită", type: "textarea" };
+  const body = require("../src/main/marina-migration-service").bookingBody(booking, 102);
+  assert.deepEqual(body.customer.custom_fields, {
+    cost_hint: "500 RON",
+    deposit_hint: "100 RON",
+    address6: "Str. Exemplu 1",
+    cerere_client6: "Cameră liniștită"
+  });
+});
+
+test("migration backfills client fields for bookings already recorded in the journal", async () => {
+  const { service, targetCalls, stored } = harness({
+    initialJournal: {
+      version: 1,
+      resources: { 6: { targetId: "102" } },
+      bookings: { 91: { targetId: "existing-booking", complete: true, stayPeriodVersion: 1 } }
+    }
+  });
+  const result = await service.run();
+  const update = targetCalls.find((call) => call[0] === "updateBooking");
+  assert.equal(result.importedBookings, 1);
+  assert.equal(targetCalls.filter((call) => call[0] === "createBooking").length, 0);
+  assert.equal(update[1], "existing-booking");
+  assert.deepEqual(update[2], {
+    customer: {
+      first_name: "Ana", last_name: "Pop", email: "ana@example.test", phone: "0700000000",
+      address: {}, custom_fields: { cost_hint: "500 RON", deposit_hint: "100 RON" }
+    }
+  });
+  assert.equal(stored().bookings["91"].customerDetailsVersion, 1);
+});
+
+test("migration corrects checkout-inclusive periods already stored in Marina", async () => {
+  const { service, targetCalls, stored } = harness({
+    initialJournal: {
+      version: 1,
+      resources: { 6: { targetId: "102" } },
+      bookings: { 91: { targetId: "existing-booking", complete: true, customerDetailsVersion: 1 } }
+    }
+  });
+  service.targetApi.quote = async (body) => {
+    targetCalls.push(["quote", body]);
+    return { payload: { data: { quote_id: "period-quote" } } };
+  };
+  service.targetApi.booking = async (id) => {
+    targetCalls.push(["booking", id]);
+    return { payload: { data: { id, version: 7, custom_fields: { migration: { original_status: "approved" }, retained: "yes" } } } };
+  };
+
+  await service.run();
+
+  const update = targetCalls.find((call) => call[0] === "updateBooking");
+  assert.equal(update[1], "existing-booking");
+  assert.deepEqual(update[2], {
+    periods: [{ start_date: "2026-08-11", end_date: "2026-08-11", units: 1 }],
+    custom_fields: {
+      retained: "yes",
+      migration: {
+        original_status: "approved",
+        source: "wpbooking-rooms",
+        source_booking_id: "91",
+        stay_period_version: 1
+      }
+    },
+    quote_id: "period-quote"
+  });
+  assert.equal(update[4], 7);
+  assert.equal(stored().bookings["91"].stayPeriodVersion, 1);
+  assert.equal(targetCalls.filter((call) => call[0] === "createBooking").length, 0);
 });
 
 test("migration reruns without recreating completed target records", async () => {
@@ -223,7 +331,57 @@ test("migration creates cancelled bookings with their final non-blocking status"
   assert.equal(preview.deferredCancelledBookings, 0);
   await service.run();
   assert.equal(targetCalls.filter((call) => call[0] === "createBooking").length, 2);
-  assert.equal(targetCalls.filter((call) => call[0] === "createBooking").find((call) => call[1].external.booking_id === "93")[1].status, "trash");
+  assert.equal(targetCalls.filter((call) => call[0] === "changeBookingStatus").some((call) => call[2].status === "trash"), true);
   assert.equal(targetCalls.filter((call) => call[0] === "changeBookingStatus").find((call) => call[1] === "target-booking")[2].status, "trash");
   assert.equal(targetCalls.filter((call) => call[0] === "cancelBooking").length, 0);
+});
+
+test("pricing validation happens before Marina writes and publishes the public-page mapping", async () => {
+  const data = fixture();
+  const targetCalls = [];
+  let pricingDocument = null;
+  let pricingReads = 0;
+  const sourceApi = {
+    async resources() { return data.resources; },
+    async bookings() { return data.bookings; }
+  };
+  const targetApi = {
+    async createResource(body, key) { targetCalls.push(["createResource", body, key]); return { payload: { data: { id: 106 } } }; },
+    async pricing() {
+      pricingReads += 1;
+      if (!pricingDocument) throw Object.assign(new Error("not configured"), { status: 422, code: "pricing_not_configured" });
+      return { payload: { data: { ...pricingDocument, version: 1 } } };
+    },
+    async putPricing(id, body, key) { targetCalls.push(["putPricing", id, body, key]); pricingDocument = body; return { payload: { data: { version: 1 } } }; },
+    async createBooking(body, key) { targetCalls.push(["createBooking", body, key]); return { payload: { data: { id: "marina-booking-91" } } }; },
+    async updateBooking(id, body, key, version) { targetCalls.push(["updateBooking", id, body, key, version]); return { payload: {} }; },
+    async changeBookingStatus(id, body, key, version) { targetCalls.push(["changeBookingStatus", id, body, key, version]); return { payload: {} }; }
+  };
+  const pricingSource = {
+    async forResources(resources) {
+      assert.equal(resources.length, 1);
+      return {
+        catalog: { source: "marina-public-prices", source_url: "https://www.marinapark.ro/preturi-cazare-camping/", coverage: { from: "2026-06-01", to: "2026-06-02" }, warnings: [] },
+        mapped: [{ source: "marina-public-prices", source_url: "https://www.marinapark.ro/preturi-cazare-camping/", source_fingerprint: "fingerprint", source_resource_id: "6", resource_name: "Camera 1", category: "double", currency: "RON", timezone: "Europe/Bucharest", days: [{ date: "2026-06-01", price_minor: 15000 }, { date: "2026-06-02", price_minor: 18000 }] }]
+      };
+    }
+  };
+  const stored = {};
+  const service = new MarinaRoomsMigrationService({ sourceApi, targetApi, pricingSource, journalStore: { load: () => structuredClone(stored), save: (value) => Object.assign(stored, structuredClone(value)) }, now: () => "2026-08-11T20:00:00.000Z" });
+  const result = await service.run();
+  assert.equal(result.importedPricing, 1);
+  assert.equal(pricingReads, 2);
+  assert.deepEqual(targetCalls.map((call) => call[0]), ["createResource", "putPricing", "createBooking", "updateBooking", "changeBookingStatus"]);
+  assert.equal(stored.pricing["6"].verified, true);
+  assert.equal(stored.pricing["6"].version, 1);
+
+  const invalidCalls = [];
+  const invalidService = new MarinaRoomsMigrationService({
+    sourceApi,
+    targetApi: { async createResource() { invalidCalls.push("createResource"); } },
+    pricingSource: { async forResources() { throw Object.assign(new Error("missing price"), { code: "marina_pricing_missing_date", permanent: true }); } },
+    journalStore: { load: () => ({}), save: () => {} }
+  });
+  await assert.rejects(() => invalidService.run(), (error) => error.code === "marina_pricing_missing_date");
+  assert.deepEqual(invalidCalls, []);
 });

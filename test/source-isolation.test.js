@@ -77,6 +77,15 @@ test("desktop emergency queue controls pause both WordPress workspaces", () => {
   assert.match(mainSource, /for \(const queueSource of \["rooms", "camping"\]\) contextFor\(queueSource\)\.service\.resumeQueue\(\)/);
 });
 
+test("payment snapshots require read access while deposit updates remain write-protected", () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, "..", "electron-main.js"), "utf8");
+  const mobileSource = fs.readFileSync(path.join(__dirname, "..", "mobile", "mobile-bridge.js"), "utf8");
+  assert.match(mainSource, /ipcMain\.handle\("booking:payment", \(_event, source, localId\) => \{ assertReadableSource\(source\)/);
+  assert.match(mainSource, /ipcMain\.handle\("booking:deposit", \(_event, source, localId, input\) => \{ assertWritableSource\(source\)/);
+  assert.match(mobileSource, /async getPayment\(id, input = \{\}\)[\s\S]*?assertReadableSource\(source\)[\s\S]*?if \(source === "marina"\)/);
+  assert.match(mobileSource, /async updateDeposit\(id, input\)[\s\S]*?assertWritableSource\(source\)[\s\S]*?if \(source === "marina"\)/);
+});
+
 test("camping timeline keeps one category row for corturi and one for rulote", () => {
   const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
   assert.match(appSource, /function timelineResources\(\)/);

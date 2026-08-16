@@ -58,7 +58,7 @@ function bookingInput(value) {
   const resourceId = Number(value.resourceId);
   if (!Number.isInteger(resourceId) || resourceId < 1) throw new TypeError("resourceId trebuie să fie un număr întreg pozitiv.");
   const bookingDates = dates(value.dates);
-  return { resourceId, dates: bookingDates, apiDates: toStayDateTimes(bookingDates), formData: formData(value.formData), bookingFormType: text(value.bookingFormType, "bookingFormType", 80), approved: Boolean(value.approved), sendEmail: Boolean(value.sendEmail), note: text(value.note, "note") };
+  return { resourceId, dates: bookingDates, apiDates: toStayDateTimes(bookingDates), formData: formData(value.formData), bookingFormType: text(value.bookingFormType, "bookingFormType", 80), approved: Boolean(value.approved), sendEmail: Boolean(value.sendEmail), note: text(value.note, "note"), quoteId: value.quoteId === undefined ? "" : text(value.quoteId, "quoteId", 200) };
 }
 
 function quoteInput(value) {
@@ -90,6 +90,7 @@ function bookingPatch(value) {
   if (value.dates !== undefined) result.dates = dates(value.dates);
   if (value.formData !== undefined) result.formData = formData(value.formData);
   if (value.bookingFormType !== undefined) result.bookingFormType = text(value.bookingFormType, "bookingFormType", 80);
+  if (value.quoteId !== undefined) result.quoteId = text(value.quoteId, "quoteId", 200);
   if (value.status !== undefined) {
     result.status = text(value.status, "status", 20, true);
     if (!["approved", "pending"].includes(result.status)) throw new TypeError("status trebuie să fie approved sau pending.");
@@ -108,14 +109,14 @@ function range(value) {
   return { start, end };
 }
 
-function deposit(value) {
+function deposit(value, { requireNote = true } = {}) {
   value = object(value);
   const amount = Number(value.deposit);
   if (!Number.isFinite(amount) || amount < 0 || Math.abs(Math.round(amount * 100) - amount * 100) > 0.000001) throw new TypeError("Avansul nu poate fi negativ și trebuie să aibă cel mult două zecimale.");
   const total = Number(value.total);
   if (!Number.isFinite(total) || total <= 0 || amount > total) throw new TypeError("Costul verificat trebuie să fie pozitiv și cel puțin egal cu avansul.");
   const note = String(value.note ?? "");
-  if (!note || note.length > 20000) throw new TypeError("Nota verificată din WordPress este obligatorie și trebuie să aibă cel mult 20000 de caractere.");
+  if ((requireNote && !note) || note.length > 20000) throw new TypeError("Nota verificată din WordPress este obligatorie și trebuie să aibă cel mult 20000 de caractere.");
   return { deposit: amount, total, note };
 }
 

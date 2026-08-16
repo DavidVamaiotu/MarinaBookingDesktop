@@ -18,6 +18,45 @@ function createOperationSignature({ source, apiBaseUrl, resourceId, dates, formD
   }));
 }
 
+function marinaStayPeriod(dates) {
+  const values = [...new Set(dates || [])]
+    .map((value) => String(value || "").slice(0, 10))
+    .filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value))
+    .sort();
+  if (!values.length) return null;
+  return {
+    start_date: values[0],
+    // Parkline includes the checkout date. Marina's date-only end_date is the
+    // final priced night, so leave the checkout half-day available.
+    end_date: values.length > 1 ? values.at(-2) : values[0]
+  };
+}
+
+function marinaAvailabilityPeriod(dates) {
+  const values = [...new Set(dates || [])]
+    .map((value) => String(value || "").slice(0, 10))
+    .filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value))
+    .sort();
+  if (!values.length) return null;
+  const formatter = new Intl.DateTimeFormat("en-US", { timeZone: "Europe/Bucharest", timeZoneName: "longOffset" });
+  const timestamp = (date, time) => {
+    const zone = formatter.formatToParts(new Date(`${date}T12:00:00Z`)).find((part) => part.type === "timeZoneName")?.value || "GMT+02:00";
+    return `${date}T${time}${zone.replace(/^GMT/, "") || "+00:00"}`;
+  };
+  return {
+    start_at: timestamp(values[0], "15:00:01"),
+    end_at: timestamp(values.at(-1), "12:00:02")
+  };
+}
+
+function marinaCheckoutDate(endDate) {
+  const value = String(endDate || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
 function normalizeMobilePriceQuote(payload, headers = {}) {
   const mode = String(payload?.mode || "");
   const total = Number(payload?.total);
@@ -62,4 +101,4 @@ function scopeMobileData(resources, bookings, source) {
   return { resources: scopedResources, bookings: scopedBookings };
 }
 
-module.exports = { canonicalValue, createOperationSignature, normalizeMobilePriceQuote, retryDelayMs, scopeMobileData, serverIdFromPayload };
+module.exports = { canonicalValue, createOperationSignature, marinaAvailabilityPeriod, marinaCheckoutDate, marinaStayPeriod, normalizeMobilePriceQuote, retryDelayMs, scopeMobileData, serverIdFromPayload };

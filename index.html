@@ -140,7 +140,7 @@
             <div><span>Depozit</span><strong id="detailsPriceDeposit">—</strong></div>
             <div class="details-price-balance"><span>Rest de plată</span><strong id="detailsPriceBalance">—</strong></div>
           </div>
-          <label class="check"><input name="keepSavedNoteAndDeposit" type="checkbox" checked><span>Păstrează nota și avansul existente</span></label>
+          <label class="check"><input name="keepSavedNoteAndDeposit" type="checkbox" checked><span id="keepSavedPricingLabel">Păstrează nota și avansul existente</span></label>
         </div>
         <div class="field-grid">
           <label>Număr adulți<select name="adults" required></select></label>
@@ -225,8 +225,7 @@
       <div class="booking-summary" aria-live="polite">
         <p id="createDateSummary">Date: <span>…</span> – <span>…</span> nopți</p>
         <p>Total: <strong id="createTotalCost">—</strong> / Avans: <strong id="createDepositCost">—</strong> / Rest: <strong id="createBalanceCost">—</strong></p>
-        <p class="quote-state-row"><span class="quote-state" id="createQuoteState" data-state="stale">neactualizat</span><button class="quote-details-toggle" id="createQuoteDetails" type="button" disabled>Detalii preț</button></p>
-        <div class="quote-breakdown" id="createQuoteBreakdown" hidden></div>
+        <p class="quote-state-row"><span class="quote-state" id="createQuoteState" data-state="stale">neactualizat</span></p>
         <div class="booking-calendar-message" id="createPricing">Selectați datele pentru calcularea prețului.</div>
         <div class="booking-calendar-message" id="createAvailability">Selectați data sosirii și data plecării.</div>
       </div>
