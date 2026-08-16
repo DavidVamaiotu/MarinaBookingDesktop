@@ -387,6 +387,22 @@ test("only fields that affect pricing trigger extra-field repricing", () => {
   assert.equal(isPricingExtraField("numar-auto"), false);
 });
 
+test("extra bed checkbox reflects the saved reservation value", () => {
+  const detailsFieldHtml = evaluate(
+    ["detailsFieldHtml"],
+    "detailsFieldHtml",
+    {
+      detailsFieldLabel: () => "Pat suplimentar (da/nu)",
+      escapeHtml: (value) => String(value),
+      isElectricityField: () => false,
+      BookingFields: { isDetailsField: () => false }
+    }
+  );
+
+  assert.doesNotMatch(detailsFieldHtml("pat-suplimentar", { value: "no", type: "checkbox" }), / checked/);
+  assert.match(detailsFieldHtml("pat-suplimentar", { value: "true", type: "checkbox" }), / checked/);
+});
+
 function saveHarness({
   keepSavedNoteAndDeposit = true,
   pricingChanged = true,

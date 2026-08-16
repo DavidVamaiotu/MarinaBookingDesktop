@@ -112,6 +112,8 @@ test("adult and child counts are always editable, including zero children", () =
 
 test("extra bed is edited as a checkbox and serializes to a WordPress boolean value", () => {
   assert.match(appSource, /name === "pat-suplimentar" \|\| isElectricityField\(name\)/);
+  assert.match(appSource, /activeWorkspace === "rooms" && !optionFields\.some\(\(\[name\]\) => name === "pat-suplimentar"\)/);
+  assert.match(appSource, /optionFields\.push\(\["pat-suplimentar", \{ value: "no", type: "checkbox" \}\]\)/);
   assert.match(appSource, /<input type="checkbox" \$\{attributes\}/);
   assert.match(appSource, /input\.type === "checkbox" \? \(input\.checked \? "true" : "no"\)/);
 });

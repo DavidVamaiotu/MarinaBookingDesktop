@@ -2147,6 +2147,7 @@ function populateDetails(booking, reset = true) {
         ? [["car_plates", { value: "", type: "text" }]]
         : [];
     const optionFields = extraFields.filter(([name, field]) => !isVehiclePlateField(name) && !isElectricityField(name) && !BookingFields.isDetailsField(name, field));
+    if (activeWorkspace === "rooms" && !optionFields.some(([name]) => name === "pat-suplimentar")) optionFields.push(["pat-suplimentar", { value: "no", type: "checkbox" }]);
     const electricityFields = extraFields.filter(([name]) => isElectricityField(name));
     if (activeWorkspace === "camping") optionFields.push(electricityFields.find(([, field]) => String(field?.value || "").trim()) || electricityFields[0] || ["Energie_electrica", { value: "no", type: "checkbox" }]);
     const namedObservation = extraFields.find(([name, field]) => BookingFields.matchesName(name, "details") && BookingFields.isDetailsField(name, field));
