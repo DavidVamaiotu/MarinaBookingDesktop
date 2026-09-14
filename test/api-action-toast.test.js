@@ -15,7 +15,7 @@ test("important API mutations use the shared action toast", () => {
     assert.match(renderer, new RegExp(`${method}: \\[".+", ".+"\\]`));
   }
   assert.match(renderer, /const toast = showToast\(pendingMessage, "pending"\)/);
-  assert.match(renderer, /showToast\(successMessage, "success", toast\)/);
+  assert.match(renderer, /showToast\(mailSuppressed \? [^;]+ : successMessage, mailSuppressed \? "error" : "success", toast\)/);
   assert.doesNotMatch(renderer, /createBooking: "Rezervarea a fost pusă în coada locală/);
   assert.match(renderer, /showToast\(shortErrorMessage\(error\), "error", toast\)/);
 });

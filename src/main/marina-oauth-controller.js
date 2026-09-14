@@ -193,13 +193,18 @@ class MarinaOAuthController extends EventEmitter {
     try {
       if (refreshToken) {
         const metadata = await this.discover();
-        await this.fetchImpl(metadata.revocationEndpoint, {
+        const response = await this.fetchImpl(metadata.revocationEndpoint, {
           method: "POST",
           headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
           body: OAuth.formBody({ token: refreshToken, token_type_hint: "refresh_token", client_id: this.config.clientId }),
           redirect: "error",
           signal: AbortSignal.timeout(this.timeoutMs)
         });
+        if (!response.ok) {
+          let payload = {};
+          try { payload = await response.json(); } catch {}
+          throw Object.assign(new Error("Contul a fost șters local, dar revocarea pe serverul Marina nu a fost confirmată."), { code: payload.error || "marina_revocation_failed", status: response.status, temporary: response.status >= 500 });
+        }
       }
     } finally {
       await this.tokenStore.clearRefreshToken();

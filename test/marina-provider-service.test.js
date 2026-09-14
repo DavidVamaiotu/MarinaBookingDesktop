@@ -21,7 +21,7 @@ test("provider performs no protected probe before OAuth and accepts an empty res
     oauth,
     api: {
       resources: async () => { resourceCalls += 1; return { payload: { data: [] } }; },
-      bookings: async (query) => { bookingQuery = query; return { payload: { data: [] } }; }
+      bookings: async (query) => { bookingQuery = query; return { payload: { data: [], has_more: false, next_cursor: "" } }; }
     }
   });
   const range = { start: "2026-08-01", end: "2026-08-31" };
@@ -35,13 +35,13 @@ test("provider performs no protected probe before OAuth and accepts an empty res
   assert.deepEqual(bookingQuery, {
     from: "2026-08-01T00:00:00+03:00",
     to: "2026-08-31T23:59:59+03:00",
-    after: null,
     limit: 200
   });
 });
 
 test("provider persists the completed booking cache once after pagination", async () => {
   const saved = [];
+  const bookingQueries = [];
   const booking = (id) => ({
     id,
     resource_id: 31,
@@ -53,9 +53,12 @@ test("provider persists the completed booking cache once after pagination", asyn
     oauth: new OAuthStub(true),
     api: {
       resources: async () => ({ payload: { data: [{ id: 31, name: "Room 31" }] } }),
-      bookings: async ({ after }) => after
-        ? { payload: { data: [booking(2)] } }
-        : { payload: { data: [booking(1)], next_cursor: "page-2" } }
+      bookings: async (query) => {
+        bookingQueries.push(query);
+        return query.cursor
+          ? { payload: { data: [booking(2)], has_more: false, next_cursor: "" } }
+          : { payload: { data: [booking(1)], has_more: true, next_cursor: "page-2" } };
+      }
     },
     cacheStore: {
       load: () => ({}),
@@ -68,6 +71,32 @@ test("provider persists the completed booking cache once after pagination", asyn
   assert.equal(state.bookings.length, 2);
   assert.equal(saved.length, 1);
   assert.equal(saved[0].bookings.length, 2);
+  assert.equal(bookingQueries[0].cursor, undefined);
+  assert.equal(bookingQueries[0].after, undefined);
+  assert.equal(bookingQueries[1].cursor, "page-2");
+});
+
+test("provider restarts booking pagination once after an invalid opaque cursor", async () => {
+  let calls = 0;
+  const booking = (id) => ({ id, resource_id: 31, status: "approved", periods: [{ start_date: "2026-09-01", end_date: "2026-09-01" }] });
+  const provider = new MarinaBookingProvider({
+    config: MarinaConfig.createConfig({ MARINA_INTEGRATION_ENABLED: "true", MARINA_OAUTH_CLIENT_ID: "public-client" }),
+    oauth: new OAuthStub(true),
+    api: {
+      resources: async () => ({ payload: { data: [{ id: 31, name: "Room 31" }] } }),
+      bookings: async ({ cursor }) => {
+        calls += 1;
+        if (calls === 2 && cursor === "expired") throw Object.assign(new Error("expired cursor"), { code: "invalid_cursor", status: 400 });
+        return cursor
+          ? { payload: { data: [booking(2)], has_more: false, next_cursor: "" } }
+          : { payload: { data: [booking(1)], has_more: true, next_cursor: calls === 1 ? "expired" : "fresh" } };
+      }
+    }
+  });
+
+  const state = await provider.refresh({ start: "2026-09-01", end: "2026-09-30" });
+  assert.equal(calls, 4);
+  assert.deepEqual(state.bookings.map((item) => item.providerId), ["1", "2"]);
 });
 
 test("provider silently refreshes a saved OAuth session when the app starts", async () => {
@@ -204,7 +233,7 @@ test("provider exposes eligible facility metadata and immutable booking snapshot
     api: {
       resources: async () => ({ payload: { data: [{ id: 31, name: "Camera 1" }] } }),
       facilities: async () => ({ payload: { data: [{ id: 4, name: "Extra bed", price_per_night_minor: 2000, applies_to_all_resources: true, resource_ids: [], active: true }] } }),
-      bookings: async () => ({ payload: { data: [{ id: 8, resource_id: 31, periods: [{ start_date: "2026-09-01", end_date: "2026-09-01" }], facilities: [{ id: 4, name: "Extra bed", price_per_night_minor: 2000, currency: "RON", billing_period: "night" }] }] } })
+      bookings: async () => ({ payload: { data: [{ id: 8, resource_id: 31, periods: [{ start_date: "2026-09-01", end_date: "2026-09-01" }], facilities: [{ id: 4, name: "Extra bed", price_per_night_minor: 2000, currency: "RON", billing_period: "night" }] }], has_more: false, next_cursor: "" } })
     }
   });
   const value = await provider.refresh({ start: "2026-09-01", end: "2026-09-03" });
@@ -352,7 +381,7 @@ test("provider keeps a created note when Marina list responses omit note fields"
     oauth,
     api: {
       resources: async () => ({ payload: { data: [{ id: 31, title: "Camera 31", booking_mode: "date_range" }] } }),
-      bookings: async () => ({ payload: { data: [{ id: 79, resource_id: 31, status: "pending", periods: [{ start_date: "2026-09-01", end_date: "2026-09-01" }], internal_note: "", version: 2 }] } })
+      bookings: async () => ({ payload: { data: [{ id: 79, resource_id: 31, status: "pending", periods: [{ start_date: "2026-09-01", end_date: "2026-09-01" }], internal_note: "", version: 2 }], has_more: false, next_cursor: "" } })
     }
   });
   provider.resources = [{ id: 7, providerId: "31", bookingMode: "date_range" }];
@@ -743,14 +772,14 @@ test("provider sends Marina payment requests with bearer auth and idempotency ke
   assert.equal(result.event, "booking.payment_requested");
 });
 
-test("provider reports actionable reconnection error when payment request returns 403 or insufficient permissions", async () => {
+test("provider preserves distinct Marina authorization errors for payment requests", async () => {
   const oauth = new OAuthStub(true);
   const provider = new MarinaBookingProvider({
     config: MarinaConfig.createConfig({ MARINA_INTEGRATION_ENABLED: "true", MARINA_OAUTH_CLIENT_ID: "public-client" }),
     oauth,
     api: {
       requestPayment: async () => {
-        throw Object.assign(new Error("Eroare Marina: insufficient permissions"), { status: 403 });
+        throw Object.assign(new Error("Eroare Marina: MFA required"), { code: "mfa_required", status: 403 });
       }
     }
   });
@@ -763,11 +792,24 @@ test("provider reports actionable reconnection error when payment request return
   await assert.rejects(
     () => provider.requestPayment("marina:77", {}),
     (error) => {
-      assert.equal(error.code, "marina_insufficient_permissions");
-      assert.match(error.message, /permisiuni/i);
+      assert.equal(error.code, "mfa_required");
+      assert.equal(error.status, 403);
       return true;
     }
   );
+});
+
+test("provider preserves queued versus suppressed payment-mail outcomes", async () => {
+  let response = { status: "suppressed", mail_outcome: "suppressed", booking_id: 77 };
+  const provider = new MarinaBookingProvider({
+    config: MarinaConfig.createConfig({ MARINA_INTEGRATION_ENABLED: "true", MARINA_OAUTH_CLIENT_ID: "public-client" }),
+    oauth: new OAuthStub(true),
+    api: { requestPayment: async () => ({ payload: response }) }
+  });
+  provider.bookings = [{ localId: "marina:77", providerId: "77", formData: {} }];
+  assert.equal((await provider.requestPayment("marina:77", {})).mail_outcome, "suppressed");
+  response = {};
+  await assert.rejects(() => provider.requestPayment("marina:77", {}), { code: "marina_invalid_response", unknownOutcome: true });
 });
 
 test("provider accepts the selected booking ID without running the legacy payment validator", async () => {
@@ -1001,7 +1043,7 @@ test("Camping fetches real resources and creates and edits bookings against thei
         }
       ] } }),
       facilities: async () => ({ payload: { data: [] } }),
-      bookings: async () => ({ payload: { data: [listedBooking] } }),
+      bookings: async () => ({ payload: { data: [listedBooking], has_more: false, next_cursor: "" } }),
       quote: async (body) => {
         quoteBodies.push(structuredClone(body));
         return { payload: { data: {

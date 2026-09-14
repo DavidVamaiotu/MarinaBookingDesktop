@@ -454,7 +454,11 @@ if (!window.marina) {
     try {
       if (refreshToken) {
         const metadata = await marinaDiscover();
-        await CapacitorHttp.post({ url: metadata.revocationEndpoint, headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" }, data: MarinaOAuth.formBody({ token: refreshToken, token_type_hint: "refresh_token", client_id: marinaBuildConfig.clientId }) });
+        const response = await CapacitorHttp.post({ url: metadata.revocationEndpoint, headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" }, data: MarinaOAuth.formBody({ token: refreshToken, token_type_hint: "refresh_token", client_id: marinaBuildConfig.clientId }) });
+        if (response.status < 200 || response.status >= 300) {
+          const payload = mobilePayload(response);
+          throw Object.assign(new Error("Contul a fost șters local, dar revocarea pe serverul Marina nu a fost confirmată."), { code: payload?.error || "marina_revocation_failed", status: response.status, temporary: response.status >= 500 });
+        }
       }
     } catch (error) {
       revocationError = error;
@@ -478,9 +482,12 @@ if (!window.marina) {
       for (const source of SOURCES) rememberConnection(source, false, true);
     }
     if (generation !== marinaAuthGeneration) throw marinaSessionSuperseded();
-    const next = await configuredState(false, true, currentSource, marinaRanges.get(currentSource) || currentRange);
+    let next = await configuredState(false, true, currentSource, marinaRanges.get(currentSource) || currentRange);
+    if (revocationError) next = {
+      ...next,
+      settings: { ...next.settings, revocationUnconfirmed: true, revocationErrorCode: revocationError.code || "marina_revocation_failed" }
+    };
     emit(next);
-    if (revocationError) console.error("Marina token revocation failed during local logout:", revocationError.code || revocationError.message);
     return next;
   }
 
@@ -749,14 +756,30 @@ if (!window.marina) {
       const facilities = facilityRows.map(normalizeMarinaFacility).map((item) => MarinaSyncResponse.validateRecord(item, "facilități"));
       const bookings = [];
       const clearedOverrideKeys = [];
-      let after = "";
+      let cursor = "";
       if (MarinaConfig.capabilities(marinaEffectiveScopes).bookingsRead) {
         const previousBookings = new Map((((await allCache())[source]?.bookings) || []).map((booking) => [booking.providerId, booking]));
+        const seenCursors = new Set();
+        let restartedInvalidCursor = false;
         let pages = 0;
-        do {
+        for (;;) {
           const params = new URLSearchParams({ ...marinaBookingQueryRange(range), limit: "200" });
-          if (after) params.set("after", after);
-          const payload = await marinaRequest(`/v1/bookings?${params}`, { source });
+          if (cursor) params.set("cursor", cursor);
+          let payload;
+          try {
+            payload = await marinaRequest(`/v1/bookings?${params}`, { source });
+          } catch (error) {
+            if (cursor && error?.code === "invalid_cursor" && !restartedInvalidCursor) {
+              bookings.length = 0;
+              clearedOverrideKeys.length = 0;
+              cursor = "";
+              seenCursors.clear();
+              pages = 0;
+              restartedInvalidCursor = true;
+              continue;
+            }
+            throw error;
+          }
           const rows = MarinaSyncResponse.collection(payload, ["bookings"], "rezervări");
           for (const booking of rows) {
             const normalized = MarinaSyncResponse.validateRecord(normalizeMarinaBookingRecord(booking, resources), "rezervări");
@@ -770,9 +793,14 @@ if (!window.marina) {
             } else if (!normalized.note && previous?.note) normalized.note = previous.note;
             bookings.push(normalized);
           }
-          after = payload?.next_cursor ?? payload?.pagination?.next_cursor ?? payload?.meta?.next_cursor ?? "";
-          if (after && ++pages > 50) throw Object.assign(new Error("Sincronizarea Marina a întâlnit prea multe pagini de rezervări."), { code: "marina_sync_page_limit", temporary: true });
-        } while (after);
+          if (typeof payload?.has_more !== "boolean") throw Object.assign(new Error("Răspunsul Marina nu conține starea paginării rezervărilor."), { code: "marina_invalid_response", temporary: true });
+          if (!payload.has_more) break;
+          const nextCursor = payload?.next_cursor;
+          if (typeof nextCursor !== "string" || !nextCursor || seenCursors.has(nextCursor)) throw Object.assign(new Error("Răspunsul Marina conține o continuare de paginare invalidă."), { code: "marina_invalid_response", temporary: true });
+          seenCursors.add(nextCursor);
+          cursor = nextCursor;
+          if (++pages > 50) throw Object.assign(new Error("Sincronizarea Marina a întâlnit prea multe pagini de rezervări."), { code: "marina_sync_page_limit", temporary: true });
+        }
       }
       if (!isCurrent()) throw superseded();
       await mutateJson(CACHE_KEY, defaultCache, (cache) => {
@@ -1268,21 +1296,17 @@ if (!window.marina) {
         const bookingId = input.bookingId ?? booking?.providerId;
         if (bookingId === undefined || bookingId === null || String(bookingId).trim() === "") throw Object.assign(new Error("Rezervarea nu are un ID Marina valid."), { code: "marina_booking_id_missing", permanent: true });
         assertMarinaSession(generation);
-        let result;
-        try {
-          result = await marinaMutation(`/v1/admin/bookings/${encodeURIComponent(bookingId)}/payment-request`, {
-            send_email: true,
-            payment_type: "deposit",
-            payment_reason: "Avans rezervare"
-          }, { method: "POST", idempotencyKey: input.idempotencyKey, source });
-        } catch (error) {
-          if (error?.status === 403 || /insufficient/i.test(error?.message || "")) {
-            throw Object.assign(new Error("Utilizatorul conectat nu are permisiunile necesare pe serverul Marina pentru trimiterea emailurilor de plată."), { code: "marina_insufficient_permissions", auth: true, permanent: true, cause: error });
-          }
-          throw error;
+        const result = await marinaMutation(`/v1/admin/bookings/${encodeURIComponent(bookingId)}/payment-request`, {
+          send_email: true,
+          payment_type: "deposit",
+          payment_reason: "Avans rezervare"
+        }, { method: "POST", idempotencyKey: input.idempotencyKey, source });
+        const outcome = result?.mail_outcome || result?.status;
+        if (!result || !["queued", "suppressed"].includes(outcome)) {
+          throw Object.assign(new Error("Răspunsul Marina nu confirmă dacă emailul a fost programat."), { code: "marina_invalid_response", unknownOutcome: true });
         }
         assertMarinaSession(generation);
-        return result || { status: "queued", booking_id: Number(bookingId) || bookingId, event: "booking.payment_requested" };
+        return result;
     },
     checkAvailability(input) {
       const generation = marinaAuthGeneration;

@@ -584,16 +584,40 @@ class MarinaBookingProvider extends EventEmitter {
           .map(normalizeFacility).map((item) => MarinaSyncResponse.validateRecord(item, "facilități"));
         const loaded = [];
         if (capabilities.bookingsRead) {
-          let after = null;
+          let cursor = null;
+          const seenCursors = new Set();
+          let restartedInvalidCursor = false;
           const from = bucharestRangeBoundary(range.start);
           const to = bucharestRangeBoundary(range.end, true);
           let pages = 0;
-          do {
-          const response = await this.api.bookings({ from, to, after, limit: 200 });
+          for (;;) {
+            let response;
+            try {
+              response = await this.api.bookings({ from, to, limit: 200, ...(cursor ? { cursor } : {}) });
+            } catch (error) {
+              if (cursor && error?.code === "invalid_cursor" && !restartedInvalidCursor) {
+                loaded.length = 0;
+                cursor = null;
+                seenCursors.clear();
+                pages = 0;
+                restartedInvalidCursor = true;
+                continue;
+              }
+              throw error;
+            }
             loaded.push(...MarinaSyncResponse.collection(response.payload, ["bookings"], "rezervări"));
-            after = response.payload?.next_cursor ?? response.payload?.pagination?.next_cursor ?? response.payload?.meta?.next_cursor ?? null;
-            if (after && ++pages > 50) throw Object.assign(new Error("Sincronizarea Marina a întâlnit prea multe pagini de rezervări."), { code: "marina_sync_page_limit", temporary: true });
-          } while (after);
+            if (typeof response.payload?.has_more !== "boolean") {
+              throw Object.assign(new Error("Răspunsul Marina nu conține starea paginării rezervărilor."), { code: "marina_invalid_response", temporary: true });
+            }
+            if (!response.payload.has_more) break;
+            const nextCursor = response.payload?.next_cursor;
+            if (typeof nextCursor !== "string" || !nextCursor || seenCursors.has(nextCursor)) {
+              throw Object.assign(new Error("Răspunsul Marina conține o continuare de paginare invalidă."), { code: "marina_invalid_response", temporary: true });
+            }
+            seenCursors.add(nextCursor);
+            cursor = nextCursor;
+            if (++pages > 50) throw Object.assign(new Error("Sincronizarea Marina a întâlnit prea multe pagini de rezervări."), { code: "marina_sync_page_limit", temporary: true });
+          }
         }
         const nextOverrides = new Map(this.noteOverrides);
         const bookings = this.normalizeBookings(loaded, this.bookings, resources, nextOverrides)
@@ -920,20 +944,17 @@ class MarinaBookingProvider extends EventEmitter {
       throw Object.assign(new Error("Rezervarea nu are un ID Marina valid."), { code: "marina_booking_id_missing", permanent: true });
     }
     const idempotencyKey = String(input.idempotencyKey || "").trim() || randomUUID();
-    let response;
-    try {
-      response = await this.api.requestPayment(bookingId, {
-        send_email: true,
-        payment_type: "deposit",
-        payment_reason: "Avans rezervare"
-      }, idempotencyKey);
-    } catch (error) {
-      if (error?.status === 403 || /insufficient/i.test(error?.message || "")) {
-        throw Object.assign(new Error("Utilizatorul conectat nu are permisiunile necesare pe serverul Marina pentru trimiterea emailurilor de plată."), { code: "marina_insufficient_permissions", auth: true, permanent: true, cause: error });
-      }
-      throw error;
+    const response = await this.api.requestPayment(bookingId, {
+      send_email: true,
+      payment_type: "deposit",
+      payment_reason: "Avans rezervare"
+    }, idempotencyKey);
+    const result = response?.payload;
+    const outcome = result?.mail_outcome || result?.status;
+    if (!result || !["queued", "suppressed"].includes(outcome)) {
+      throw Object.assign(new Error("Răspunsul Marina nu confirmă dacă emailul a fost programat."), { code: "marina_invalid_response", unknownOutcome: true });
     }
-    return response?.payload || { status: "queued", booking_id: Number(bookingId) || bookingId, event: "booking.payment_requested" };
+    return result;
   }
   retry() { throw Object.assign(new Error("Marina nu folosește coada providerului existent."), { code: "marina_feature_unsupported", permanent: true }); }
   revert() { return this.retry(); }

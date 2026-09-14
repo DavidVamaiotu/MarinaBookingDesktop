@@ -258,8 +258,12 @@ async function disconnectMarina(requestedSource = "rooms") {
   catch (error) { revocationError = error; }
   const states = new Map();
   for (const source of VALID_SOURCES) states.set(source, contexts[source].service.clearSession());
-  if (revocationError) console.error("Marina token revocation failed during local logout:", revocationError.code || revocationError.message);
-  return states.get(VALID_SOURCES.has(requestedSource) ? requestedSource : "rooms");
+  const state = states.get(VALID_SOURCES.has(requestedSource) ? requestedSource : "rooms");
+  if (!revocationError) return state;
+  return {
+    ...state,
+    settings: { ...state.settings, revocationUnconfirmed: true, revocationErrorCode: revocationError.code || "marina_revocation_failed" }
+  };
 }
 
 function createMarinaWorkspaceContexts() {

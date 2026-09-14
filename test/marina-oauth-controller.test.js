@@ -127,3 +127,29 @@ test("logout invalidates a pending token response before it can restore credenti
   assert.equal(stored, "");
   assert.equal(controller.status().connected, false);
 });
+
+test("logout clears local credentials but reports an unconfirmed server revocation", async () => {
+  const config = MarinaConfig.createConfig({ MARINA_INTEGRATION_ENABLED: "true", MARINA_OAUTH_CLIENT_ID: "public-client" });
+  let stored = "refresh-token";
+  const controller = new MarinaOAuthController({
+    config,
+    tokenStore: {
+      getRefreshToken: async () => stored,
+      clearRefreshToken: async () => { stored = ""; },
+      hasRefreshTokenSync: () => Boolean(stored)
+    },
+    openExternal: async () => {},
+    fetchImpl: async (url) => url.endsWith("/.well-known/oauth-authorization-server")
+      ? response(200, { issuer: "https://booking.husi.ro", revocation_endpoint: "https://booking.husi.ro/oauth/revoke" })
+      : response(500, { error: "server_error" })
+  });
+
+  await assert.rejects(controller.disconnect(), (error) => {
+    assert.equal(error.code, "server_error");
+    assert.equal(error.status, 500);
+    assert.match(error.message, /șters local/);
+    return true;
+  });
+  assert.equal(stored, "");
+  assert.equal(controller.status().connected, false);
+});

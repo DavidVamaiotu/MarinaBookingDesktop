@@ -226,6 +226,9 @@ async function toggleMarinaConnection() {
   await runExclusive("marina-connection", [$("#settingsMarinaAction"), $("#marinaSetupAction")], async () => {
     const next = connected ? await window.marina.disconnectMarina() : await window.marina.connectMarina();
     if (isMarinaSource(activeWorkspace)) applyState(next);
+    if (connected && next?.settings?.revocationUnconfirmed) {
+      throw Object.assign(new Error("Contul a fost șters local, dar revocarea pe serverul Marina nu a fost confirmată."), { code: next.settings.revocationErrorCode || "marina_revocation_failed" });
+    }
   });
 }
 
@@ -803,7 +806,8 @@ async function runApiAction(method, ...args) {
   const toast = showToast(pendingMessage, "pending");
   try {
     const result = await window.marina[method](...args);
-    showToast(successMessage, "success", toast);
+    const mailSuppressed = method === "requestPayment" && (result?.mail_outcome === "suppressed" || result?.status === "suppressed");
+    showToast(mailSuppressed ? "Emailul de plată nu a fost programat de serverul Marina." : successMessage, mailSuppressed ? "error" : "success", toast);
     return result;
   } catch (error) {
     showToast(shortErrorMessage(error), "error", toast);

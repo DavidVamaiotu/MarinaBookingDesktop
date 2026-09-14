@@ -28,6 +28,11 @@ test("structured API codes are translated even when their message is unknown", (
     ErrorMessages.message({ code: "http_503", message: "Unexpected text" }),
     "Serverul Marina nu poate fi accesat momentan. Încercați din nou."
   );
+  assert.match(ErrorMessages.message({ code: "mfa_required", message: "Unexpected text" }), /doi pași/);
+  assert.match(ErrorMessages.message({ code: "password_change_required", message: "Unexpected text" }), /Schimbați parola/);
+  assert.match(ErrorMessages.message({ code: "workspace_forbidden", message: "Unexpected text" }), /workspace-ul Marina selectat/);
+  assert.match(ErrorMessages.message({ code: "forbidden", message: "Unexpected text" }), /permisiunea necesară/);
+  assert.match(ErrorMessages.message({ code: "mfa_required", message: "Eroare Marina: MFA required" }), /doi pași/);
 });
 
 test("Romanian errors are preserved and unknown English errors use a Romanian fallback", () => {

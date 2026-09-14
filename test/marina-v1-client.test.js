@@ -270,6 +270,22 @@ test("Marina API client serializes availability IDs as integers", async () => {
   assert.equal(body.exclude_booking_id, 1592);
 });
 
+test("Marina API client sends only valid booking page limits and opaque cursors", async () => {
+  let requestedUrl = "";
+  const client = new MarinaV1ApiClient({
+    baseUrl: "https://booking.husi.ro",
+    oauth: { getAccessToken: async () => "token" },
+    fetchImpl: async (url) => { requestedUrl = url; return response(200, { data: [], has_more: false, next_cursor: "" }); }
+  });
+  await client.bookings({ limit: 200, cursor: "opaque+/=" });
+  const url = new URL(requestedUrl);
+  assert.equal(url.searchParams.get("limit"), "200");
+  assert.equal(url.searchParams.get("cursor"), "opaque+/=");
+  assert.equal(url.searchParams.has("after"), false);
+  assert.throws(() => client.bookings({ limit: 201 }), /între 1 și 200/);
+  assert.throws(() => client.bookings({ limit: 1.5 }), /între 1 și 200/);
+});
+
 test("Marina API client preserves conflicts and retry metadata", async () => {
   const client = new MarinaV1ApiClient({
     oauth: { getAccessToken: async () => "token" },

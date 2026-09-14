@@ -6,8 +6,14 @@
   "use strict";
 
   const FALLBACK = "Acțiunea nu a putut fi finalizată. Încercați din nou.";
+  const AUTHORITATIVE_CODE_RULES = [
+    [/mfa_required/i, "Finalizați verificarea în doi pași în Marina înainte de a reîncerca."],
+    [/password_change_required/i, "Schimbați parola contului Marina înainte de a reîncerca."],
+    [/workspace_forbidden/i, "Contul conectat nu are acces la workspace-ul Marina selectat."],
+    [/^forbidden$/i, "Contul conectat nu are permisiunea necesară pentru această acțiune în Marina."]
+  ];
   const CODE_RULES = [
-    [/marina_insufficient_permissions/i, "Utilizatorul conectat nu are permisiuni de administrator pentru trimiterea emailurilor de plată pe serverul Marina."],
+    [/marina_insufficient_permissions/i, "Utilizatorul conectat nu are permisiuni de scriere pentru trimiterea emailurilor de plată pe serverul Marina."],
     [/rate_limit|http_429/i, "Au fost trimise prea multe cereri. Aplicația va reîncerca automat."],
     [/authentication|forbidden|unauthorized|http_40[13]/i, "Autentificarea Marina a eșuat. Reconectați contul."],
     [/availability|resource.*unavailable/i, "Perioada sau spațiul selectat nu mai este disponibil."],
@@ -27,7 +33,7 @@
     [/failed|unknown/i, FALLBACK]
   ];
   const MESSAGE_RULES = [
-    [/insufficient.*permissions?/i, "Utilizatorul conectat nu are permisiuni de administrator pentru trimiterea emailurilor de plată pe serverul Marina."],
+    [/insufficient.*permissions?/i, "Utilizatorul conectat nu are permisiuni de scriere pentru trimiterea emailurilor de plată pe serverul Marina."],
     [/too many requests|rate limit/i, "Au fost trimise prea multe cereri. Aplicația va reîncerca automat."],
     [/unauthorized|forbidden|not allowed|authentication required|invalid credentials/i, "Autentificarea Marina a eșuat. Reconectați contul."],
     [/booking not found|no booking exists/i, "Rezervarea nu a fost găsită în Marina."],
@@ -62,8 +68,11 @@
 
   function message(error, fallback = FALLBACK) {
     const raw = clean(error?.message || error);
-    if (raw && isRomanian(raw)) return raw;
     const code = clean(error?.code);
+    for (const [pattern, translated] of AUTHORITATIVE_CODE_RULES) {
+      if (code && pattern.test(code)) return translated;
+    }
+    if (raw && isRomanian(raw)) return raw;
     for (const [pattern, translated] of CODE_RULES) {
       if (code && pattern.test(code)) return translated;
     }

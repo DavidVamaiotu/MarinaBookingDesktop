@@ -59,6 +59,14 @@ function integerField(value, name) {
   return number;
 }
 
+function pageLimit(value = 200) {
+  const limit = Number(value);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) {
+    throw new TypeError("limit trebuie să fie un număr întreg între 1 și 200.");
+  }
+  return limit;
+}
+
 function bookingRequestBody(body, { expectedVersion } = {}) {
   const result = { ...(body || {}) };
   if (result.resource_id !== undefined) result.resource_id = integerField(result.resource_id, "resource_id");
@@ -213,7 +221,7 @@ class MarinaV1ApiClient {
   closures(id, options) { return this.request(`/v1/resources/${encodeURIComponent(id)}/closures`, options); }
   availabilityCheck(body, options = {}) { return this.request("/v1/availability/check", { ...options, method: "POST", body: bookingRequestBody(body) }); }
   availabilityResources(from, to, options) { return this.request(`/v1/availability/resources?${queryString({ from, to })}`, options); }
-  bookings(query = {}, options) { return this.request(`/v1/bookings?${queryString({ ...query, limit: Math.min(200, Number(query.limit) || 200) })}`, options); }
+  bookings(query = {}, options) { return this.request(`/v1/bookings?${queryString({ ...query, limit: pageLimit(query.limit) })}`, options); }
   quote(body, options = {}) { return this.request("/v1/quotes", { ...options, method: "POST", body: bookingRequestBody(body) }); }
   booking(id, options) { return this.request(`/v1/bookings/${encodeURIComponent(id)}`, options); }
   payment(id, options) { return this.booking(id, options); }

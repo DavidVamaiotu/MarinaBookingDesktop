@@ -119,7 +119,7 @@ test("newer range refresh wins and the superseded request never persists", async
     api: {
       resources: async () => ++resourceCalls === 1 ? firstResources.promise : { payload: { data: [resource(32)] } },
       facilities: async () => ({ payload: { data: [] } }),
-      bookings: async ({ from }) => ({ payload: { data: [booking(from.includes("10-01") ? 2 : 1, from.includes("10-01") ? 32 : 31, from.slice(0, 10))] } })
+      bookings: async ({ from }) => ({ payload: { data: [booking(from.includes("10-01") ? 2 : 1, from.includes("10-01") ? 32 : 31, from.slice(0, 10))], has_more: false, next_cursor: "" } })
     },
     cacheStore: { load: () => ({}), save: (value) => saved.push(structuredClone(value)) }
   });
@@ -142,7 +142,7 @@ test("malformed later booking pages preserve the previous complete cache and syn
     api: {
       resources: async () => ({ payload: { data: [resource()] } }),
       facilities: async () => ({ payload: { data: [] } }),
-      bookings: async ({ after }) => after ? { payload: { unexpected: [] } } : { payload: { data: [booking("new")], next_cursor: "next" } }
+      bookings: async ({ cursor }) => cursor ? { payload: { unexpected: [], has_more: false, next_cursor: "" } } : { payload: { data: [booking("new")], has_more: true, next_cursor: "next" } }
     }, cacheStore: { load: () => ({}), save: () => { saved += 1; } }
   });
   provider.resources = [{ id: 7, providerId: "31" }];

@@ -265,6 +265,13 @@ test("Marina payment email calls only the backend deposit payment-request flow",
   assert.doesNotMatch(paymentEmail, /PaymentRequest\.|updateDeposit|amount_minor|visitorbookingpayurl|plata-rezervare2/);
   assert.match(appSource, /runApiAction\("updateDeposit", booking\.localId,[\s\S]*marinaPaymentRequestKeys\.delete\(`\$\{source\}:\$\{booking\.localId\}`\)/);
   assert.match(appSource, /runExclusive\(`payment-request:\$\{activeWorkspace\}:\$\{booking\.localId\}`, \[\$\("#sendPaymentRequest"\), \$\("#bookingMenuSendPayment"\)\]/);
+  assert.match(appSource, /result\?\.mail_outcome === "suppressed" \|\| result\?\.status === "suppressed"/);
+  assert.match(appSource, /Emailul de plată nu a fost programat de serverul Marina/);
+});
+
+test("logout applies local clearing while warning when server revocation is unconfirmed", () => {
+  assert.match(appSource, /applyState\(next\);[\s\S]*next\?\.settings\?\.revocationUnconfirmed/);
+  assert.match(appSource, /Contul a fost șters local, dar revocarea pe serverul Marina nu a fost confirmată/);
 });
 
 test("booking popup exposes deposit and payment email through a three-dot menu", () => {

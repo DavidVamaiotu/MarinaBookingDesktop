@@ -66,8 +66,17 @@ test("mobile refreshes build configuration over stale saved settings", () => {
 
 test("mobile refresh sends the full local calendar range to Marina", () => {
   assert.match(bridgeSource, /marinaBookingQueryRange\(range\)/);
+  assert.match(bridgeSource, /params\.set\("cursor", cursor\)/);
+  assert.doesNotMatch(bridgeSource, /params\.set\("after",/);
+  assert.match(bridgeSource, /typeof payload\?\.has_more !== "boolean"/);
   assert.match(bridgeSource, /marinaBookingDates\(booking, resource\)/);
   assert.match(bridgeSource, /marinaBookingResourceId\(booking, periods\)/);
+});
+
+test("mobile logout distinguishes local clearing from failed server revocation", () => {
+  assert.match(bridgeSource, /payload\?\.error \|\| "marina_revocation_failed"/);
+  assert.match(bridgeSource, /Contul a fost șters local, dar revocarea pe serverul Marina nu a fost confirmată/);
+  assert.match(bridgeSource, /revocationUnconfirmed: true/);
 });
 
 test("mobile normalizes OAuth token scopes before deriving write capabilities", () => {
@@ -94,6 +103,7 @@ test("mobile Marina writes use versioning and keep payment email explicit", () =
   assert.match(bridgeSource, /const body = \{ deposit_minor: depositMinor, send_email: false, internal_note: nextNote \}/);
   assert.match(bridgeSource, /\/v1\/admin\/bookings\/\$\{encodeURIComponent\(bookingId\)\}\/payment-request/);
   assert.match(bridgeSource, /send_email: true,[\s\S]*payment_type: "deposit",[\s\S]*payment_reason: "Avans rezervare"/);
+  assert.match(bridgeSource, /\["queued", "suppressed"\]\.includes\(outcome\)/);
 });
 
 test("mobile executes shared retry, strict sync, and conflict recovery behavior", () => {
