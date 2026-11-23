@@ -233,7 +233,6 @@ async function toggleMarinaConnection() {
 }
 
 async function openSettingsDialog({ connectIfNeeded = false } = {}) {
-  cancelDrag();
   if (createDialog.open) createDialog.close();
   if (duplicateDialog.open) duplicateDialog.close();
   closeBookingOverlays();
@@ -255,7 +254,6 @@ async function openSettingsDialog({ connectIfNeeded = false } = {}) {
 
 async function switchWorkspace(source) {
   if (!new Set(["rooms", "camping"]).has(source) || source === activeWorkspace) return;
-  cancelDrag();
   clearTimeout(shiftRefreshTimer);
   shiftRefreshTimer = null;
   const switchId = ++workspaceSwitchId;
@@ -347,7 +345,6 @@ const paymentSnapshots = new Map();
 const marinaPaymentRequestKeys = new Map();
 const paymentSnapshotErrors = new Map();
 const paymentSnapshotLoading = new Set();
-let dragState = null;
 let availabilityTimer = null;
 let availabilityRequestId = 0;
 let availabilityState = "idle";
@@ -371,7 +368,6 @@ let shiftRefreshTimer = null;
 let suppressMonthUpdate = false;
 let monthNavigationLockedUntil = 0;
 let programmaticScrollFrame = null;
-let lastDragEndedAt = 0;
 let newlyCreatedBookingId = null;
 let newlyCreatedHighlightTimer = null;
 let createSubmitting = false;
@@ -676,7 +672,6 @@ function beginTouchZoom(event) {
     return;
   }
   if (event.touches.length !== 2) return;
-  cancelDrag();
   cameraPanState = null;
   event.preventDefault();
   const midpointX = touchMidpointX(event.touches);
@@ -1034,9 +1029,9 @@ function createBar(item, lane, predecessorKey = "") {
   element.dataset.signature = barSignature(item, lane, predecessorKey);
   element.style.gridColumn = `${start + 2} / ${end + 2}`;
   element.style.gridRow = lane;
-  element.title = `${item.title} · ${formatDate(item.start)}–${formatDate(item.end)} · trage de margine pentru redimensionare`;
+  element.title = `${item.title} · ${formatDate(item.start)}–${formatDate(item.end)}`;
   // pi-lens-ignore: no-inner-html-js
-  element.innerHTML = `<button class="timeline-handle" data-drag-mode="resize-start" type="button" aria-label="Redimensionează sosirea"></button><div class="timeline-bar-content"><div class="timeline-bar-label"><strong class="timeline-bar-guest">${escapeHtml(item.title)}</strong><span class="timeline-bar-meta">${escapeHtml(formatDate(item.start))}–${escapeHtml(formatDate(item.end))}${item.subtitle ? ` · ${escapeHtml(item.subtitle)}` : ""}</span></div></div><button class="timeline-handle" data-drag-mode="resize-end" type="button" aria-label="Redimensionează plecarea"></button>`;
+  element.innerHTML = `<div class="timeline-bar-content"><div class="timeline-bar-label"><strong class="timeline-bar-guest">${escapeHtml(item.title)}</strong><span class="timeline-bar-meta">${escapeHtml(formatDate(item.start))}–${escapeHtml(formatDate(item.end))}${item.subtitle ? ` · ${escapeHtml(item.subtitle)}` : ""}</span></div></div>`;
   return element;
 }
 
@@ -1060,11 +1055,11 @@ function syncRow(element, row, virtualized) {
     const signature = barSignature(item, lane, predecessorKey);
     const current = existing.get(item.key);
     if (!current) element.append(createBar(item, lane, predecessorKey));
-    else if (current.dataset.signature !== signature && dragState?.booking.localId !== item.key) current.replaceWith(createBar(item, lane, predecessorKey));
+    else if (current.dataset.signature !== signature) current.replaceWith(createBar(item, lane, predecessorKey));
     else current.classList.toggle("is-newly-created", item.key === newlyCreatedBookingId);
     existing.delete(item.key);
   }
-  for (const bar of existing.values()) if (bar.dataset.bookingId !== dragState?.booking.localId) bar.remove();
+  for (const bar of existing.values()) bar.remove();
   element.classList.toggle("is-empty", row.layout.items.length === 0);
 }
 
@@ -1208,7 +1203,6 @@ function renderAvailabilityTimeline({ desiredLeft = null } = {}) {
 }
 
 function setAvailabilityView(show) {
-  cancelDrag();
   const wasActive = availabilityViewActive;
   const availabilityAnchor = wasActive ? availabilityVisibleDate() : todayIso();
   availabilityViewActive = Boolean(show) && activeWorkspace === "rooms";
@@ -1779,7 +1773,6 @@ function selectCreateDate(value) {
 }
 
 function openCreate({ resourceId, date } = {}) {
-  cancelDrag();
   closeBookingOverlays();
   const form = $("#createForm");
   form.reset();
@@ -1814,7 +1807,6 @@ function openCreate({ resourceId, date } = {}) {
 }
 
 function openDuplicate(booking) {
-  cancelDrag();
   const resources = state.resources.filter((resource) => resource.active !== false && Number(resource.id) !== Number(booking.resourceId));
   if (!resources.length) {
     showError(new Error("Nu există un alt spațiu activ pentru această rezervare."));
@@ -2245,7 +2237,6 @@ window.addEventListener("marina:back", (event) => {
 });
 
 function populateDetails(booking, reset = true) {
-  cancelDrag();
   if (reset) invalidateCalendarRequests();
   selectedBookingId = booking.localId;
   selectedBookingView = "edit";
@@ -2339,7 +2330,6 @@ function renderDetailsPrice(note, quote = null) {
 }
 
 function populatePaymentDialog(booking, reset = true) {
-  cancelDrag();
   selectedBookingId = booking.localId;
   selectedBookingView = "payment";
   bookingMenu.hidden = true;
@@ -2526,14 +2516,7 @@ function shiftTimelineWindow(monthDelta) {
   const adjustment = daysBetween(oldStart, windowStart) * dayWidth;
   const nextLeft = Math.max(0, oldLeft - adjustment);
   renderTimeline({ preserveScroll: false, targetScrollLeft: nextLeft });
-  if (dragState) {
-    dragState.scrollLeft -= adjustment;
-    dragState.bar = guestTimeline.querySelector(`[data-booking-id="${CSS.escape(dragState.booking.localId)}"]`);
-    dragState.bar?.classList.add("is-dragging");
-    updateDraggedBar();
-  } else {
-    scheduleShiftedRangeRefresh();
-  }
+  scheduleShiftedRangeRefresh();
 }
 
 function recenterTimelineWindow(force = false, scrollDelta = 0) {
@@ -2577,7 +2560,6 @@ function handleTimelineScroll() {
 
 function handleTimelineWheel(event) {
   if (event.ctrlKey) {
-    cancelDrag();
     event.preventDefault();
     if (!wheelPinchState) wheelPinchState = { mode: null, x: 0, y: 0, timer: null };
     wheelPinchState.x += event.deltaX;
@@ -2604,7 +2586,6 @@ function handleTimelineWheel(event) {
     }
     return;
   }
-  if (dragState) return;
   const factor = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? timelineShell.clientWidth : 1;
   const x = event.deltaX * factor;
   const y = event.deltaY * factor;
@@ -2617,138 +2598,14 @@ function handleTimelineWheel(event) {
   updateVisibleMonthFromScroll();
 }
 
-function autoScrollDuringDrag(event) {
-  const rect = timelineShell.getBoundingClientRect();
-  const edge = 72 * cameraScale;
-  if (event.clientX > rect.right - edge) timelineShell.scrollLeft += dayWidth * 2;
-  else if (event.clientX < rect.left + edge) timelineShell.scrollLeft -= dayWidth * 2;
-  else return;
-  lastScrollLeft = timelineShell.scrollLeft;
-  recenterTimelineWindow(true);
-}
-
-function beginDrag(event) {
-  if (event.pointerType === "touch") return;
-  if (event.button !== 0) return;
-  const bar = event.target.closest(".timeline-bar");
-  if (!bar) return;
-  const mode = event.target.closest(".timeline-handle")?.dataset.dragMode;
-  if (mode !== "resize-start" && mode !== "resize-end") return;
-  const booking = bookingById(bar.dataset.bookingId);
-  if (!booking) return;
-  event.preventDefault();
-  try { bar.setPointerCapture(event.pointerId); } catch {}
-  dragState = { pointerId: event.pointerId, bar, booking, mode, clientX: event.clientX, scrollLeft: timelineScrollLeft(), originalDates: [...booking.dates], originalSyncState: booking.syncState, lastDelta: 0, changed: false };
-  bar.classList.add("is-dragging");
-  bar.closest(".timeline-row")?.classList.add("is-drop-target");
-}
-
-function updateDraggedBar() {
-  if (!dragState?.bar) return;
-  const { bar, booking } = dragState;
-  const start = Math.max(0, daysBetween(windowStart, booking.dates[0]));
-  const end = Math.min(dayCount, daysBetween(windowStart, booking.dates[booking.dates.length - 1]) + 1);
-  const duration = booking.dates.length;
-  bar.style.gridColumn = `${start + 2} / ${end + 2}`;
-  bar.classList.toggle("is-compact", duration <= 2);
-  bar.classList.toggle("is-tight", duration > 2 && duration <= 4);
-  const todayIndex = daysBetween(windowStart, todayIso());
-  setTimelineBarPastDays(bar, Math.max(0, Math.min(end - start, todayIndex - start)));
-  const meta = bar.querySelector(".timeline-bar-meta");
-  if (meta) meta.textContent = `${formatDate(booking.dates[0])}–${formatDate(booking.dates[booking.dates.length - 1])}`;
-}
-
-function moveDrag(event) {
-  if (!dragState || event.pointerId !== dragState.pointerId) return;
-  if (event.buttons !== undefined && (event.buttons & 1) !== 1) {
-    cancelDrag();
-    return;
-  }
-  autoScrollDuringDrag(event);
-  const delta = Math.round(((event.clientX - dragState.clientX) / cameraScale + timelineScrollLeft() - dragState.scrollLeft) / dayWidth);
-  if (delta === dragState.lastDelta) return;
-  let start = utcDate(dragState.originalDates[0]);
-  let end = utcDate(dragState.originalDates[dragState.originalDates.length - 1]);
-  const minimumSpan = Math.max(0, daysBetween(start, end) - 1);
-  if (dragState.mode === "resize-start") start = addDays(start, Math.min(delta, minimumSpan));
-  else end = addDays(end, Math.max(delta, -minimumSpan));
-  const nextDates = rangeDates(start, end);
-  if (!nextDates.length) return;
-  dragState.booking.dates = nextDates;
-  dragState.booking.startDate = iso(start);
-  dragState.booking.endDate = iso(end);
-  dragState.booking.syncState = "queued";
-  dragState.lastDelta = delta;
-  dragState.changed = nextDates.length !== dragState.originalDates.length || nextDates.some((date, index) => date !== dragState.originalDates[index]);
-  updateDraggedBar();
-  dragState.bar?.classList.add("is-dragging");
-  dragState.bar?.closest(".timeline-row")?.classList.add("is-drop-target");
-}
-
-function releaseDragState() {
-  const completed = dragState;
-  dragState = null;
-  if (!completed) return null;
-  try {
-    if (completed.bar?.hasPointerCapture?.(completed.pointerId)) completed.bar.releasePointerCapture(completed.pointerId);
-  } catch {}
-  completed.bar?.classList.remove("is-dragging");
-  completed.bar?.closest(".timeline-row")?.classList.remove("is-drop-target");
-  return completed;
-}
-
-async function endDrag(event) {
-  if (!dragState || event.pointerId !== dragState.pointerId) return;
-  const completed = releaseDragState();
-  if (!completed.changed) return;
-  lastDragEndedAt = performance.now();
-  const source = activeWorkspace;
-  try {
-    const bookingFormType = resourceById(completed.booking.resourceId)?.defaultForm || "";
-    const formData = BookingFields.prepareFormData(completed.booking.formData, completed.booking.resourceId);
-    const quote = requireValidQuote(await window.marina.quoteBooking({ resourceId: completed.booking.resourceId, sourceResourceId: completed.booking.resourceId, dates: completed.booking.dates, formData, facilityIds: completed.booking.facilityIds || [], bookingFormType, mode: "full", forceFresh: true, source }));
-    if (source !== activeWorkspace) throw workspaceChangedError();
-    const note = recalculatedBookingNote(quote, completed.booking.note);
-    await runApiAction("editBooking", completed.booking.localId, { dates: completed.booking.dates, resourceId: completed.booking.resourceId, sourceResourceId: completed.booking.resourceId, formData, facilityIds: completed.booking.facilityIds || [], bookingFormType, ...(quote.quoteId ? { quoteId: quote.quoteId } : {}), note, source });
-    completed.booking.note = note;
-    renderTimeline();
-    void refreshRange({ force: false, quiet: true });
-  } catch (error) {
-    completed.booking.dates = completed.originalDates;
-    completed.booking.startDate = completed.originalDates[0];
-    completed.booking.endDate = completed.originalDates[completed.originalDates.length - 1];
-    completed.booking.syncState = completed.originalSyncState;
-    showError(error);
-    renderTimeline();
-  }
-}
-
-function cancelDrag() {
-  const cancelled = releaseDragState();
-  if (!cancelled) return;
-  cancelled.booking.dates = cancelled.originalDates;
-  cancelled.booking.startDate = cancelled.originalDates[0];
-  cancelled.booking.endDate = cancelled.originalDates[cancelled.originalDates.length - 1];
-  cancelled.booking.syncState = cancelled.originalSyncState;
-  renderTimeline();
-}
-
 timelineShell.addEventListener("scroll", handleTimelineScroll, { passive: true });
 cameraViewport.addEventListener("wheel", handleTimelineWheel, { passive: false });
 cameraViewport.addEventListener("touchstart", beginTouchZoom, { passive: false });
 cameraViewport.addEventListener("touchmove", moveTouchZoom, { passive: false });
 cameraViewport.addEventListener("touchend", endTouchZoom, { passive: true });
 cameraViewport.addEventListener("touchcancel", endTouchZoom, { passive: true });
-guestTimeline.addEventListener("pointerdown", beginDrag);
-guestTimeline.addEventListener("lostpointercapture", cancelDrag);
-document.addEventListener("pointermove", moveDrag);
-document.addEventListener("pointerup", endDrag);
-document.addEventListener("pointercancel", cancelDrag);
-document.addEventListener("visibilitychange", () => { if (document.hidden) cancelDrag(); });
-window.addEventListener("pagehide", cancelDrag);
-window.addEventListener("blur", cancelDrag);
 guestTimeline.addEventListener("click", (event) => {
-  if (dragState || performance.now() - lastDragEndedAt < 250 || performance.now() - lastCameraPanEndedAt < 250) return;
+  if (performance.now() - lastCameraPanEndedAt < 250) return;
   const bar = event.target.closest(".timeline-bar");
   if (bar) openBookingMenu(bookingById(bar.dataset.bookingId), bar);
 });

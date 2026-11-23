@@ -482,16 +482,78 @@ test("provider cancels and restores a Marina booking through supported API actio
   const trashed = await provider.update("marina:trash-restore", { trashed: true, sendEmail: true }, "trash");
   assert.equal(trashed.trashed, true);
   assert.equal(trashed.providerStatus, "cancelled");
+  assert.equal(trashed.previousStatus, "approved");
   assert.equal(calls[0].action, "cancel");
   assert.deepEqual(calls[0].body, { send_email: true });
 
   const restored = await provider.update("marina:trash-restore", { trashed: false, sendEmail: false }, "trash");
   assert.equal(restored.trashed, false);
-  assert.equal(restored.status, "pending");
+  assert.equal(restored.status, "approved");
+  assert.equal(restored.providerStatus, "approved");
+  assert.equal(restored.previousStatus, "");
   assert.equal(calls[1].action, "status");
-  assert.deepEqual(calls[1].body, { status: "pending", send_email: false });
+  assert.deepEqual(calls[1].body, { status: "approved", send_email: false });
   assert.equal(calls[0].version, 4);
   assert.equal(calls[1].version, 4);
+});
+
+test("provider restores a cancelled booking to pending when it was pending or has no previous_status", async () => {
+  const calls = [];
+  const provider = new MarinaBookingProvider({
+    config: MarinaConfig.createConfig({ MARINA_INTEGRATION_ENABLED: "true", MARINA_OAUTH_CLIENT_ID: "public-client" }),
+    oauth: new OAuthStub(true),
+    api: {
+      changeBookingStatus: async (id, body) => {
+        calls.push({ id, body });
+        return { payload: { data: { booking_id: id, status: body.status } } };
+      }
+    }
+  });
+  provider.resources = [{ id: 7, providerId: "31" }];
+  provider.bookings = [
+    {
+      localId: "marina:was-pending",
+      providerId: "was-pending",
+      providerResourceId: "31",
+      resourceId: 7,
+      dates: ["2026-09-01", "2026-09-02"],
+      status: "pending",
+      providerStatus: "cancelled",
+      previousStatus: "pending",
+      trashed: true,
+      formData: {},
+      note: "",
+      version: 2
+    },
+    {
+      localId: "marina:legacy-cancelled",
+      providerId: "legacy-cancelled",
+      providerResourceId: "31",
+      resourceId: 7,
+      dates: ["2026-09-03", "2026-09-04"],
+      status: "pending",
+      providerStatus: "cancelled",
+      previousStatus: "",
+      trashed: true,
+      formData: {},
+      note: "",
+      version: 3
+    }
+  ];
+  provider.refreshAfterMutation = () => {};
+
+  const restoredPending = await provider.update("marina:was-pending", { trashed: false, sendEmail: false }, "trash");
+  assert.equal(restoredPending.status, "pending");
+  assert.equal(restoredPending.providerStatus, "pending");
+
+  const restoredLegacy = await provider.update("marina:legacy-cancelled", { trashed: false, sendEmail: false }, "trash");
+  assert.equal(restoredLegacy.status, "pending");
+  assert.equal(restoredLegacy.providerStatus, "pending");
+
+  assert.deepEqual(calls, [
+    { id: "was-pending", body: { status: "pending", send_email: false } },
+    { id: "legacy-cancelled", body: { status: "pending", send_email: false } }
+  ]);
 });
 
 test("provider restores Marina customer custom fields into calendar form data", () => {

@@ -115,7 +115,7 @@ test("mobile executes shared retry, strict sync, and conflict recovery behavior"
 
 test("mobile Marina trash actions use cancel and restore status routes", () => {
   assert.match(bridgeSource, /const action = trashed \? "cancel" : "status"/);
-  assert.match(bridgeSource, /const status = trashed \? "cancelled" : "pending"/);
+  assert.match(bridgeSource, /const status = trashed \? "cancelled" : \(normalizeMarinaRestorableStatus\(booking\.previousStatus\) \|\| "pending"\)/);
   assert.match(bridgeSource, /trashed \? \{ send_email \} : \{ status, send_email \}/);
   assert.match(bridgeSource, /marinaBookingIsTrashed\(booking\)/);
   assert.doesNotMatch(bridgeSource, /marina_restore_unsupported/);

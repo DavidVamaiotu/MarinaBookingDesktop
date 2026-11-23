@@ -344,7 +344,6 @@ test("opening Add New Reservation dismisses the active booking editor before usi
     ["openCreate"],
     "({ openCreate })",
     {
-      cancelDrag() { events.push("cancel-drag"); },
       closeBookingOverlays() { events.push("close-editor"); },
       $(selector) {
         assert.equal(selector, "#createForm");
@@ -371,7 +370,7 @@ test("opening Add New Reservation dismisses the active booking editor before usi
 
   openCreate();
 
-  assert.deepEqual(events, ["cancel-drag", "close-editor", "reset-create-form", "render-create-calendar", "show-create"]);
+  assert.deepEqual(events, ["close-editor", "reset-create-form", "render-create-calendar", "show-create"]);
 });
 
 test("repricing leaves the keep-note-and-deposit choice unchanged", () => {

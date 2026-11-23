@@ -278,6 +278,11 @@ function bookingPeriods(booking) {
   return [];
 }
 
+function normalizeRestorableStatus(value) {
+  const status = String(value || "").trim().toLowerCase();
+  return ["approved", "pending", "declined", "completed"].includes(status) ? status : "";
+}
+
 function normalizeBooking(booking, resources) {
   const providerId = externalId(booking);
   const periods = bookingPeriods(booking);
@@ -324,6 +329,7 @@ function normalizeBooking(booking, resources) {
     resourceId: resource?.id || uiId(providerResourceId),
     status: ["approved", "confirmed", "active", "completed"].includes(status) ? "approved" : "pending",
     providerStatus: status,
+    previousStatus: normalizeRestorableStatus(booking.previous_status ?? booking.previousStatus),
     trashed: marinaBookingIsTrashed(booking),
     note: noteText(booking),
     price: booking.price && typeof booking.price === "object" ? { ...booking.price } : null,
@@ -521,6 +527,7 @@ class MarinaBookingProvider extends EventEmitter {
       id: booking.providerId,
       resource_id: Number(booking.providerResourceId),
       status: booking.providerStatus || booking.status,
+      previous_status: booking.previousStatus || "",
       periods: period ? [period] : [],
       customer: customerFromFormData(booking.formData),
       guests: {
@@ -766,14 +773,23 @@ class MarinaBookingProvider extends EventEmitter {
     const booking = this.findBooking(localId);
     let response;
     let mutationBody;
+    let optimisticFields = null;
     try {
       if (type === "status") {
         mutationBody = { status: patch.status, send_email: Boolean(patch.sendEmail) };
+        optimisticFields = {
+          previous_status: ["cancelled", "trash"].includes(String(patch.status || "").toLowerCase())
+            ? normalizeRestorableStatus(booking.providerStatus || booking.status)
+            : ""
+        };
         response = await this.idempotentMutation(JSON.stringify(["status", booking.providerId, mutationBody, booking.version]), (key) => this.api.changeBookingStatus(booking.providerId, mutationBody, key, booking.version));
       }
       else if (type === "trash") {
         const trashed = Boolean(patch.trashed);
-        mutationBody = { status: trashed ? "cancelled" : "pending", send_email: Boolean(patch.sendEmail) };
+        const restoredStatus = normalizeRestorableStatus(booking.previousStatus) || "pending";
+        const previousStatus = trashed ? normalizeRestorableStatus(booking.providerStatus || booking.status) : "";
+        mutationBody = { status: trashed ? "cancelled" : restoredStatus, send_email: Boolean(patch.sendEmail) };
+        optimisticFields = { previous_status: previousStatus };
         response = trashed
           ? await this.idempotentMutation(JSON.stringify(["trash", trashed, booking.providerId, mutationBody, booking.version]), (key) => this.api.cancelBooking(booking.providerId, { send_email: mutationBody.send_email }, key, booking.version))
           : await this.idempotentMutation(JSON.stringify(["status", booking.providerId, mutationBody, booking.version]), (key) => this.api.changeBookingStatus(booking.providerId, mutationBody, key, booking.version));
@@ -822,6 +838,7 @@ class MarinaBookingProvider extends EventEmitter {
     const normalized = this.storeMutationBooking(normalizeBooking({
       ...this.bookingSnapshot(booking),
       ...mutationBody,
+      ...(optimisticFields || {}),
       ...authoritative,
       ...(hasNoteMutation ? { internal_note: noteOverride } : {}),
       id: booking.providerId

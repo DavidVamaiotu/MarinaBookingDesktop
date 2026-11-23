@@ -641,6 +641,11 @@ if (!window.marina) {
     return normalizeMarinaFacilityIds(booking?.facility_ids).map((id) => ({ id }));
   }
 
+  function normalizeMarinaRestorableStatus(value) {
+    const status = String(value || "").trim().toLowerCase();
+    return ["approved", "pending", "declined", "completed"].includes(status) ? status : "";
+  }
+
   function normalizeMarinaBookingRecord(booking, resources) {
     const periods = marinaBookingPeriods(booking);
     const providerId = String(booking.id ?? booking.booking_id ?? booking.bookingId ?? booking?.booking?.id ?? booking?.booking?.booking_id ?? "").trim();
@@ -661,6 +666,7 @@ if (!window.marina) {
       resourceId: marinaUiId(providerResourceId),
       status: ["approved", "confirmed", "active", "completed"].includes(status) ? "approved" : "pending",
       providerStatus: status,
+      previousStatus: normalizeMarinaRestorableStatus(booking.previous_status ?? booking.previousStatus),
       trashed: marinaBookingIsTrashed(booking),
       note: marinaNoteText(booking),
       price: booking.price && typeof booking.price === "object" ? { ...booking.price } : null,
@@ -854,6 +860,7 @@ if (!window.marina) {
       id: booking.providerId,
       resource_id: Number(booking.providerResourceId),
       status: booking.providerStatus || booking.status,
+      previous_status: booking.previousStatus || "",
       periods: period ? [{ ...period, units: 1 }] : [],
       customer: customerFromFormData(booking.formData),
       guests: {
@@ -1176,7 +1183,10 @@ if (!window.marina) {
       if (!booking) throw Object.assign(new Error("Rezervarea Marina nu există în cache."), { code: "marina_booking_missing", permanent: true });
       assertMarinaSession(generation);
       const result = await marinaMutation(`/v1/bookings/${encodeURIComponent(booking.providerId)}/status`, { status: patch.status, send_email: Boolean(patch.sendEmail) }, { version: booking.version, source });
-      const normalized = await storeMarinaMutationBooking({ ...marinaBookingSnapshot(booking), status: patch.status, ...result, id: booking.providerId }, {}, source, generation);
+      const previousStatus = ["cancelled", "trash"].includes(String(patch.status || "").toLowerCase())
+        ? normalizeMarinaRestorableStatus(booking.providerStatus || booking.status)
+        : "";
+      const normalized = await storeMarinaMutationBooking({ ...marinaBookingSnapshot(booking), status: patch.status, previous_status: previousStatus, ...result, id: booking.providerId }, {}, source, generation);
       scheduleMarinaRefresh(source);
       return normalized;
     },
@@ -1201,11 +1211,12 @@ if (!window.marina) {
       if (!booking) throw Object.assign(new Error("Rezervarea Marina nu există în cache."), { code: "marina_booking_missing", permanent: true });
       assertMarinaSession(generation);
       const trashed = Boolean(patch.trashed);
-      const status = trashed ? "cancelled" : "pending";
+      const previousStatus = trashed ? normalizeMarinaRestorableStatus(booking.providerStatus || booking.status) : "";
+      const status = trashed ? "cancelled" : (normalizeMarinaRestorableStatus(booking.previousStatus) || "pending");
       const action = trashed ? "cancel" : "status";
       const send_email = Boolean(patch.sendEmail);
       const result = await marinaMutation(`/v1/bookings/${encodeURIComponent(booking.providerId)}/${action}`, trashed ? { send_email } : { status, send_email }, { version: booking.version, source });
-      const normalized = await storeMarinaMutationBooking({ ...marinaBookingSnapshot(booking), status, ...result, id: booking.providerId }, {}, source, generation);
+      const normalized = await storeMarinaMutationBooking({ ...marinaBookingSnapshot(booking), status, previous_status: previousStatus, ...result, id: booking.providerId }, {}, source, generation);
       scheduleMarinaRefresh(source);
       return normalized;
     },

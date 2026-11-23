@@ -19,15 +19,10 @@ test("Android Back closes an open booking menu before exiting the app", () => {
   assert.match(appSource, /window\.addEventListener\("marina:back", \(event\) => \{\s*if \(!dismissTopLayer\(\)\) return;\s*event\.preventDefault\(\);/);
 });
 
-test("touch input cannot start a reservation resize", () => {
-  assert.match(appSource, /function beginDrag\(event\) \{\s*if \(event\.pointerType === "touch"\) return;/);
-  assert.match(stylesSource, /\.timeline-handle\{cursor:ew-resize;touch-action:pan-x pan-y\}/);
-});
-
-test("cancelled pointers restore the original booking instead of syncing a resize", () => {
-  assert.match(appSource, /document\.addEventListener\("pointercancel", cancelDrag\)/);
-  assert.match(appSource, /cancelled\.booking\.dates = cancelled\.originalDates/);
-  assert.doesNotMatch(appSource, /document\.addEventListener\("pointercancel", endDrag\)/);
+test("mouse and touch drag-resizing on timeline bars is completely removed", () => {
+  assert.doesNotMatch(appSource, /\b(?:beginDrag|moveDrag|endDrag|cancelDrag|autoScrollDuringDrag|updateDraggedBar|dragState|lastDragEndedAt)\b/);
+  assert.doesNotMatch(appSource, /timeline-handle|resize-start|resize-end|trage de margine/);
+  assert.doesNotMatch(stylesSource, /timeline-handle|is-dragging|is-drop-target|ew-resize|cursor:grab/);
 });
 
 test("horizontal pinch keeps the original timeline zoom inside the isolated camera", () => {
@@ -37,7 +32,7 @@ test("horizontal pinch keeps the original timeline zoom inside the isolated came
   assert.match(appSource, /function setTimelineZoom\(nextWidth, clientX, anchorDay = null/);
   assert.match(appSource, /cameraViewport\.addEventListener\("touchstart", beginTouchZoom, \{ passive: false \}\)/);
   assert.match(appSource, /queueTimelineZoom\(touchZoomState\.startDayWidth \* scale, touchMidpointX\(event\.touches\), touchZoomState\.anchorDay\)/);
-  const wheelSource = appSource.slice(appSource.indexOf("function handleTimelineWheel"), appSource.indexOf("function autoScrollDuringDrag"));
+  const wheelSource = appSource.slice(appSource.indexOf("function handleTimelineWheel"), appSource.indexOf('timelineShell.addEventListener("scroll"'));
   assert.match(wheelSource, /wheelPinchState\.mode === "horizontal"[\s\S]*queueTimelineZoom\(baseWidth \* Math\.exp\(-delta \* 0\.01\), event\.clientX\)/);
 });
 
@@ -79,12 +74,11 @@ test("screen coordinates are explicitly converted through the inverse camera tra
   assert.match(appSource, /function screenToCameraViewport\(clientX, clientY\)[\s\S]*clientX - rect\.left[\s\S]*clientY - rect\.top/);
   assert.match(appSource, /function screenToCameraContent\(clientX, clientY, state = currentCameraState\(\)\)[\s\S]*CameraTransform\.viewportToContent/);
   assert.match(appSource, /const x = \(event\.clientX - rect\.left\) \/ cameraScale - timelineUnitWidth\(\) \+ timelineScrollLeft\(\)/);
-  assert.match(appSource, /\(event\.clientX - dragState\.clientX\) \/ cameraScale/);
   assert.match(appSource, /previousBounds\.right - currentBounds\.left\) \/ cameraScale/);
 });
 
 test("high resolution horizontal scrolling preserves the full trackpad delta", () => {
-  const wheelSource = appSource.slice(appSource.indexOf("function handleTimelineWheel"), appSource.indexOf("function autoScrollDuringDrag"));
+  const wheelSource = appSource.slice(appSource.indexOf("function handleTimelineWheel"), appSource.indexOf('timelineShell.addEventListener("scroll"'));
   assert.match(wheelSource, /timelineShell\.scrollLeft \+= horizontal/);
   assert.doesNotMatch(wheelSource, /Math\.min\(Math\.max\(horizontal/);
   assert.match(wheelSource, /queueTimelineRecenter\(horizontal\)/);
