@@ -633,6 +633,45 @@ test("provider hydrates the separate notes collection only when internal_note is
   assert.equal(detailed.note, "Notă suplimentară");
 });
 
+test("provider skips separate notes fetch when booking already returns an authoritative notes array", async () => {
+  const oauth = new OAuthStub(true);
+  let noteReads = 0;
+  const provider = new MarinaBookingProvider({
+    config: MarinaConfig.createConfig({ MARINA_INTEGRATION_ENABLED: "true", MARINA_OAUTH_CLIENT_ID: "public-client" }),
+    oauth,
+    api: {
+      booking: async () => ({ payload: { data: { id: "booking-empty-notes", resource_id: 31, periods: [{ start_date: "2026-08-01", end_date: "2026-08-02" }], notes: [] } } }),
+      listNotes: async () => { noteReads += 1; return { payload: { data: [] } }; }
+    }
+  });
+  provider.resources = [{ id: 7, providerId: "31" }];
+  provider.bookings = [{ localId: "marina:booking-empty-notes", providerId: "booking-empty-notes", providerResourceId: "31", resourceId: 7, dates: ["2026-08-01"], note: "Notă veche", status: "approved" }];
+  const detailed = await provider.details("marina:booking-empty-notes");
+  assert.equal(detailed.note, "");
+  assert.equal(noteReads, 0);
+});
+
+test("provider hydrates notes from list bookings and clears stale cached notes when list returns empty notes", () => {
+  const provider = new MarinaBookingProvider({
+    config: MarinaConfig.createConfig({ MARINA_INTEGRATION_ENABLED: "true", MARINA_OAUTH_CLIENT_ID: "public-client" }),
+    oauth: new OAuthStub(true),
+    api: {}
+  });
+  const resources = [{ id: 7, providerId: "31" }];
+  const previous = [
+    { localId: "marina:1", providerId: "1", note: "Stale note" },
+    { localId: "marina:2", providerId: "2", note: "Keep when omitted" }
+  ];
+  const normalized = provider.normalizeBookings([
+    { id: "1", resource_id: 31, periods: [{ start_date: "2026-08-01", end_date: "2026-08-02" }], notes: [] },
+    { id: "2", resource_id: 31, periods: [{ start_date: "2026-08-03", end_date: "2026-08-04" }] },
+    { id: "3", resource_id: 31, periods: [{ start_date: "2026-08-05", end_date: "2026-08-06" }], notes: [{ id: 9, body: "Notă din listă" }] }
+  ], previous, resources);
+  assert.equal(normalized[0].note, "");
+  assert.equal(normalized[1].note, "Keep when omitted");
+  assert.equal(normalized[2].note, "Notă din listă");
+});
+
 test("provider replaces and clears a Marina internal note through booking PATCH", async () => {
   const oauth = new OAuthStub(true);
   const updates = [];

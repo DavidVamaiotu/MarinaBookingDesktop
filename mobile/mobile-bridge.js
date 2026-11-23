@@ -785,12 +785,15 @@ if (!window.marina) {
             const normalized = MarinaSyncResponse.validateRecord(normalizeMarinaBookingRecord(booking, resources), "rezervări");
             const previous = previousBookings.get(normalized.providerId);
             const overrideKey = marinaOverrideKey(source, normalized.providerId);
+            const hasNotesArray = Array.isArray(booking?.notes) || Array.isArray(booking?.internal_notes);
+            const responseHasNote = Object.prototype.hasOwnProperty.call(booking || {}, "internal_note")
+              || Object.prototype.hasOwnProperty.call(booking || {}, "note")
+              || hasNotesArray;
             if (marinaNoteOverrides.has(overrideKey)) {
               const override = marinaNoteOverrides.get(overrideKey);
-              const responseHasNote = Object.prototype.hasOwnProperty.call(booking || {}, "internal_note") || Object.prototype.hasOwnProperty.call(booking || {}, "note");
               if (responseHasNote && normalized.note === override) clearedOverrideKeys.push([overrideKey, override]);
               else normalized.note = override;
-            } else if (!normalized.note && previous?.note) normalized.note = previous.note;
+            } else if (!hasNotesArray && !normalized.note && previous?.note) normalized.note = previous.note;
             bookings.push(normalized);
           }
           if (typeof payload?.has_more !== "boolean") throw Object.assign(new Error("Răspunsul Marina nu conține starea paginării rezervărilor."), { code: "marina_invalid_response", temporary: true });
@@ -1060,14 +1063,16 @@ if (!window.marina) {
       const resources = (await allCache())[source].resources;
       const detailed = normalizeMarinaBookingRecord({ ...record, id: record?.id ?? cached.providerId }, resources);
       const hasInternalNote = Object.prototype.hasOwnProperty.call(record || {}, "internal_note");
+      const hasNotesCollection = Array.isArray(record?.notes) || Array.isArray(record?.internal_notes);
+      const hasAuthoritativeNote = hasInternalNote || hasNotesCollection;
       const overrideKey = marinaOverrideKey(source, cached.providerId);
       const hasNoteOverride = marinaNoteOverrides.has(overrideKey);
       const noteOverride = hasNoteOverride ? marinaNoteOverrides.get(overrideKey) : null;
       if (hasNoteOverride) {
-        if (hasInternalNote && detailed.note === noteOverride) marinaNoteOverrides.delete(overrideKey);
+        if (hasAuthoritativeNote && detailed.note === noteOverride) marinaNoteOverrides.delete(overrideKey);
         else detailed.note = noteOverride;
       }
-      const notesPromise = hasNoteOverride || hasInternalNote || detailed.note || cached.note
+      const notesPromise = hasNoteOverride || hasAuthoritativeNote || detailed.note || cached.note
         ? Promise.resolve([])
         : fetchMarinaNotes(cached.providerId, source).catch(() => []);
       const merge = (noteValues) => ({
@@ -1076,7 +1081,7 @@ if (!window.marina) {
         resourceId: detailed.providerResourceId ? detailed.resourceId : cached.resourceId,
         providerResourceId: detailed.providerResourceId || cached.providerResourceId,
         dates: detailed.dates.length ? detailed.dates : cached.dates,
-        note: PricingNote.normalize(marinaJoinNoteValues(hasInternalNote ? [detailed.note] : [detailed.note || cached.note, ...(!detailed.note && !cached.note ? noteValues : [])]))
+        note: PricingNote.normalize(marinaJoinNoteValues(hasAuthoritativeNote ? [detailed.note] : [detailed.note || cached.note, ...(!detailed.note && !cached.note ? noteValues : [])]))
       });
       let merged = merge([]);
       await mutateJson(CACHE_KEY, defaultCache, (cache) => {
@@ -1253,7 +1258,10 @@ if (!window.marina) {
         const latestRecord = latestPayload?.data?.booking || latestPayload?.data || latestPayload?.booking || latestPayload || {};
         const depositMinor = Math.round(deposit * 100);
         if (!Number.isSafeInteger(depositMinor)) throw new Error("Avansul este prea mare.");
-        const responseHasNote = Object.prototype.hasOwnProperty.call(latestRecord, "internal_note") || Object.prototype.hasOwnProperty.call(latestRecord, "note");
+        const responseHasNote = Object.prototype.hasOwnProperty.call(latestRecord, "internal_note")
+          || Object.prototype.hasOwnProperty.call(latestRecord, "note")
+          || Array.isArray(latestRecord?.notes)
+          || Array.isArray(latestRecord?.internal_notes);
         const currentNote = responseHasNote
           ? marinaNoteText(latestRecord)
           : PricingNote.normalize(marinaJoinNoteValues(await fetchMarinaNotes(booking.providerId, source)));

@@ -489,13 +489,15 @@ class MarinaBookingProvider extends EventEmitter {
     return records.map((booking) => {
       const normalized = normalizeBooking(booking, resources);
       const cached = previous.get(normalized.providerId);
+      const hasNotesArray = Array.isArray(booking?.notes) || Array.isArray(booking?.internal_notes);
+      const responseHasNote = Object.prototype.hasOwnProperty.call(booking || {}, "internal_note")
+        || Object.prototype.hasOwnProperty.call(booking || {}, "note")
+        || hasNotesArray;
       if (noteOverrides.has(normalized.providerId)) {
         const override = noteOverrides.get(normalized.providerId);
-        const responseHasNote = Object.prototype.hasOwnProperty.call(booking || {}, "internal_note")
-          || Object.prototype.hasOwnProperty.call(booking || {}, "note");
         if (responseHasNote && normalized.note === override) noteOverrides.delete(normalized.providerId);
         else normalized.note = override;
-      } else if (!normalized.note && cached?.note) normalized.note = cached.note;
+      } else if (!hasNotesArray && !normalized.note && cached?.note) normalized.note = cached.note;
       return normalized;
     });
   }
@@ -660,13 +662,15 @@ class MarinaBookingProvider extends EventEmitter {
     const detailedRecord = entity(bookingResponse.payload, ["booking"]);
     const detailed = normalizeBooking(detailedRecord, this.resources);
     const hasInternalNote = Object.prototype.hasOwnProperty.call(detailedRecord || {}, "internal_note");
+    const hasNotesCollection = Array.isArray(detailedRecord?.notes) || Array.isArray(detailedRecord?.internal_notes);
+    const hasAuthoritativeNote = hasInternalNote || hasNotesCollection;
     const hasNoteOverride = this.noteOverrides.has(current.providerId);
     const noteOverride = hasNoteOverride ? this.noteOverrides.get(current.providerId) : null;
     if (hasNoteOverride) {
-      if (hasInternalNote && detailed.note === noteOverride) this.noteOverrides.delete(current.providerId);
+      if (hasAuthoritativeNote && detailed.note === noteOverride) this.noteOverrides.delete(current.providerId);
       else detailed.note = noteOverride;
     }
-    const notesPromise = hasNoteOverride || hasInternalNote || detailed.note || current.note
+    const notesPromise = hasNoteOverride || hasAuthoritativeNote || detailed.note || current.note
       ? Promise.resolve([])
       : this.fetchNotes(current.providerId).catch(() => []);
     const merge = (noteValues) => ({
@@ -676,8 +680,8 @@ class MarinaBookingProvider extends EventEmitter {
       providerResourceId: detailed.providerResourceId || current.providerResourceId,
       dates: detailed.dates.length ? detailed.dates : current.dates,
       note: PricingNote.normalize(joinNoteValues([
-        detailed.note || (!hasInternalNote ? current.note : ""),
-        ...(!hasInternalNote && !detailed.note && !current.note ? noteValues : [])
+        detailed.note || (!hasAuthoritativeNote ? current.note : ""),
+        ...(!hasAuthoritativeNote && !detailed.note && !current.note ? noteValues : [])
       ]))
     });
     let merged = merge([]);
@@ -877,7 +881,10 @@ class MarinaBookingProvider extends EventEmitter {
     if (!Number.isSafeInteger(depositMinor)) {
       throw Object.assign(new Error("Avansul este prea mare."), { code: "invalid_deposit", permanent: true });
     }
-    const responseHasNote = Object.prototype.hasOwnProperty.call(latestRecord, "internal_note") || Object.prototype.hasOwnProperty.call(latestRecord, "note");
+    const responseHasNote = Object.prototype.hasOwnProperty.call(latestRecord, "internal_note")
+      || Object.prototype.hasOwnProperty.call(latestRecord, "note")
+      || Array.isArray(latestRecord?.notes)
+      || Array.isArray(latestRecord?.internal_notes);
     const currentNote = responseHasNote
       ? noteText(latestRecord)
       : PricingNote.normalize(joinNoteValues(await this.fetchNotes(booking.providerId)));
