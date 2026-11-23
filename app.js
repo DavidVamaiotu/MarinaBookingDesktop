@@ -256,6 +256,8 @@ async function openSettingsDialog({ connectIfNeeded = false } = {}) {
 async function switchWorkspace(source) {
   if (!new Set(["rooms", "camping"]).has(source) || source === activeWorkspace) return;
   cancelDrag();
+  clearTimeout(shiftRefreshTimer);
+  shiftRefreshTimer = null;
   const switchId = ++workspaceSwitchId;
   invalidateCalendarRequests();
   if (createDialog.open) createDialog.close();
@@ -333,6 +335,9 @@ let wheelPinchState = null;
 let timelineRows = [];
 let monthDividerDays = [];
 let rowRenderFrame = null;
+let lastRenderedRowRange = "";
+let lastRenderedScaleKey = "";
+let lastRenderedGridKey = "";
 let selectedBookingId = null;
 let selectedBookingView = "";
 let sagaInvoiceDraft = null;
@@ -360,6 +365,9 @@ const showTrashedByWorkspace = { rooms: false, camping: false };
 let showTrashed = showTrashedByWorkspace.rooms;
 let lastScrollLeft = 0;
 let lastRecenterAt = 0;
+let recenterFrame = null;
+let pendingRecenterDelta = 0;
+let shiftRefreshTimer = null;
 let suppressMonthUpdate = false;
 let monthNavigationLockedUntil = 0;
 let programmaticScrollFrame = null;
@@ -858,8 +866,14 @@ function updateTrashedToggle() {
 function renderScale() {
   updateDayWidth();
   currentRange();
-  timelineShell.style.setProperty("--timeline-days", dayCount);
   const today = todayIso();
+  const scaleKey = `${iso(windowStart)}:${dayCount}:${dayWidth}:${today}`;
+  if (scaleKey === lastRenderedScaleKey) {
+    $("#monthLabel").textContent = formatMonth(focusMonth);
+    return;
+  }
+  lastRenderedScaleKey = scaleKey;
+  timelineShell.style.setProperty("--timeline-days", dayCount);
   const weekdays = ["Du", "Lu", "Ma", "Mi", "Jo", "Vi", "Sâ"];
   const days = [];
   for (let index = 0; index < dayCount; index += 1) {
@@ -896,6 +910,9 @@ function renderScale() {
 function updateDateGridBackground() {
   const rowHeight = LANE_HEIGHT;
   const today = todayIso();
+  const gridKey = `${iso(windowStart)}:${dayCount}:${dayWidth}:${today}`;
+  if (gridKey === lastRenderedGridKey) return;
+  lastRenderedGridKey = gridKey;
   const grids = [];
   const positions = [];
   const sizes = [];
@@ -1090,6 +1107,12 @@ function updateStickyReservationLabels() {
 function renderVisibleRows(force = false) {
   const virtualized = timelineRows.length > VIRTUAL_THRESHOLD;
   const [start, end] = visibleRowBounds();
+  const rangeKey = `${virtualized ? 1 : 0}:${start}:${end}`;
+  if (!force && rangeKey === lastRenderedRowRange) {
+    if (cameraScale > 1.001) updateStickyReservationLabels();
+    return;
+  }
+  lastRenderedRowRange = rangeKey;
   const desired = timelineRows.slice(start, end);
   const existing = new Map([...guestTimeline.querySelectorAll(":scope > .timeline-row")].map((row) => [Number(row.dataset.resourceId), row]));
   const elements = desired.map((row) => {
@@ -1116,13 +1139,17 @@ function queueRowRender() {
   rowRenderFrame = requestAnimationFrame(() => { rowRenderFrame = null; renderVisibleRows(); });
 }
 
-function renderTimeline({ preserveScroll = true } = {}) {
-  const left = timelineShell.scrollLeft;
+function renderTimeline({ preserveScroll = true, targetScrollLeft = null } = {}) {
+  const left = targetScrollLeft ?? timelineShell.scrollLeft;
   const top = timelineShell.scrollTop;
   renderScale();
   updateDateGridBackground();
   prepareRows();
-  if (preserveScroll) { timelineShell.scrollLeft = left; timelineShell.scrollTop = top; lastScrollLeft = left; }
+  if (preserveScroll || targetScrollLeft !== null) {
+    timelineShell.scrollLeft = Math.max(0, left);
+    timelineShell.scrollTop = top;
+    lastScrollLeft = timelineShell.scrollLeft;
+  }
 }
 
 function availabilityCellLabel(cell) {
@@ -2483,48 +2510,67 @@ function updateVisibleMonthFromScroll() {
   $("#monthLabel").textContent = formatMonth(focusMonth);
 }
 
+function scheduleShiftedRangeRefresh() {
+  clearTimeout(shiftRefreshTimer);
+  shiftRefreshTimer = setTimeout(() => {
+    shiftRefreshTimer = null;
+    void refreshRange({ force: false, quiet: true });
+  }, 150);
+}
+
 function shiftTimelineWindow(monthDelta) {
   const oldStart = windowStart;
   const oldLeft = timelineScrollLeft();
   windowStart = addMonths(windowStart, monthDelta);
   currentRange();
   const adjustment = daysBetween(oldStart, windowStart) * dayWidth;
-  renderTimeline({ preserveScroll: true });
   const nextLeft = Math.max(0, oldLeft - adjustment);
-  setTimelineScrollLeft(nextLeft);
-  lastScrollLeft = timelineShell.scrollLeft;
-  renderVisibleRows(true);
+  renderTimeline({ preserveScroll: false, targetScrollLeft: nextLeft });
   if (dragState) {
     dragState.scrollLeft -= adjustment;
     dragState.bar = guestTimeline.querySelector(`[data-booking-id="${CSS.escape(dragState.booking.localId)}"]`);
     dragState.bar?.classList.add("is-dragging");
     updateDraggedBar();
   } else {
-    void refreshRange({ force: false, quiet: true, desiredLeft: nextLeft });
+    scheduleShiftedRangeRefresh();
   }
 }
 
-function recenterTimelineWindow(force = false) {
+function recenterTimelineWindow(force = false, scrollDelta = 0) {
+  if (!force && suppressMonthUpdate) return false;
   const maxScroll = Math.max(0, guestTimeline.scrollWidth - timelineShell.clientWidth);
   if (!maxScroll) return false;
   const now = performance.now();
-  if (!force && now - lastRecenterAt < 250) return false;
+  if (!force && now - lastRecenterAt < 400) return false;
   const edge = Math.min(dayWidth * 28, maxScroll * 0.2);
   const scrollLeft = timelineScrollLeft();
+  const averageMonthWidth = 30.4375 * dayWidth;
+  const shiftMonths = Math.max(1, Math.min(TIMELINE_WINDOW_SHIFT_MONTHS, Math.round(Math.abs(scrollLeft - maxScroll / 2) / averageMonthWidth)));
   let direction = 0;
-  if (scrollLeft >= maxScroll - edge) direction = TIMELINE_WINDOW_SHIFT_MONTHS;
-  else if (scrollLeft <= edge) direction = -TIMELINE_WINDOW_SHIFT_MONTHS;
+  if (scrollLeft >= maxScroll - edge && (force || scrollDelta > 0)) direction = shiftMonths;
+  else if (scrollLeft <= edge && (force || scrollDelta < 0)) direction = -shiftMonths;
   if (!direction) return false;
   lastRecenterAt = now;
   shiftTimelineWindow(direction);
   return true;
 }
 
+function queueTimelineRecenter(scrollDelta) {
+  pendingRecenterDelta += scrollDelta;
+  if (recenterFrame) return;
+  recenterFrame = requestAnimationFrame(() => {
+    recenterFrame = null;
+    const delta = pendingRecenterDelta;
+    pendingRecenterDelta = 0;
+    if (delta !== 0) recenterTimelineWindow(false, delta);
+  });
+}
+
 function handleTimelineScroll() {
   dismissBookingMenu();
-  const horizontal = Math.abs(timelineShell.scrollLeft - lastScrollLeft) >= 1;
+  const scrollDelta = timelineShell.scrollLeft - lastScrollLeft;
   lastScrollLeft = timelineShell.scrollLeft;
-  if (horizontal) recenterTimelineWindow();
+  if (!suppressMonthUpdate && Math.abs(scrollDelta) >= 1) queueTimelineRecenter(scrollDelta);
   updateVisibleMonthFromScroll();
   queueRowRender();
 }
@@ -2562,14 +2608,13 @@ function handleTimelineWheel(event) {
   const factor = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? timelineShell.clientWidth : 1;
   const x = event.deltaX * factor;
   const y = event.deltaY * factor;
-  const horizontal = event.shiftKey ? y : x;
+  const horizontal = event.shiftKey ? (y || x) : x;
   if ((!event.shiftKey && Math.abs(horizontal) <= Math.abs(y)) || horizontal === 0) return;
   event.preventDefault();
   timelineShell.scrollLeft += horizontal;
   lastScrollLeft = timelineShell.scrollLeft;
-  recenterTimelineWindow();
+  queueTimelineRecenter(horizontal);
   updateVisibleMonthFromScroll();
-  queueRowRender();
 }
 
 function autoScrollDuringDrag(event) {
@@ -3231,19 +3276,18 @@ function setVisibleMonth(month) {
   focusMonth = target;
   suppressMonthUpdate = true;
   monthNavigationLockedUntil = performance.now() + 900;
-  renderTimeline({ preserveScroll: true });
+  lastRecenterAt = performance.now();
+  if (recenterFrame) { cancelAnimationFrame(recenterFrame); recenterFrame = null; pendingRecenterDelta = 0; }
   const targetLeft = scrollLeftForDate(target);
-  setTimelineScrollLeft(targetLeft);
-  lastScrollLeft = timelineShell.scrollLeft;
+  renderTimeline({ preserveScroll: false, targetScrollLeft: targetLeft });
   if (programmaticScrollFrame) cancelAnimationFrame(programmaticScrollFrame);
   programmaticScrollFrame = requestAnimationFrame(() => {
     programmaticScrollFrame = null;
     setTimelineScrollLeft(targetLeft);
     lastScrollLeft = timelineShell.scrollLeft;
-    renderVisibleRows(true);
     requestAnimationFrame(() => { suppressMonthUpdate = false; $("#monthLabel").textContent = formatMonth(focusMonth); });
   });
-  if (shifted) void refreshRange({ force: false, quiet: true, desiredLeft: targetLeft });
+  if (shifted) scheduleShiftedRangeRefresh();
 }
 
 $("#prevMonth").addEventListener("click", () => setVisibleMonth(addMonths(focusMonth, -1)));

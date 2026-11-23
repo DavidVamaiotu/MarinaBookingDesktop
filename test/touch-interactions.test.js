@@ -87,6 +87,21 @@ test("high resolution horizontal scrolling preserves the full trackpad delta", (
   const wheelSource = appSource.slice(appSource.indexOf("function handleTimelineWheel"), appSource.indexOf("function autoScrollDuringDrag"));
   assert.match(wheelSource, /timelineShell\.scrollLeft \+= horizontal/);
   assert.doesNotMatch(wheelSource, /Math\.min\(Math\.max\(horizontal/);
+  assert.match(wheelSource, /queueTimelineRecenter\(horizontal\)/);
+  assert.doesNotMatch(wheelSource, /queueRowRender\(\)/);
+});
+
+test("month window recentering is direction-aware, center-targeting, and never snaps scroll back after async refresh", () => {
+  const shiftSource = appSource.slice(appSource.indexOf("function scheduleShiftedRangeRefresh"), appSource.indexOf("function handleTimelineScroll"));
+  assert.doesNotMatch(shiftSource, /desiredLeft/);
+  assert.match(shiftSource, /renderTimeline\(\{ preserveScroll: false, targetScrollLeft: nextLeft \}\)/);
+  assert.match(shiftSource, /scrollLeft >= maxScroll - edge && \(force \|\| scrollDelta > 0\)/);
+  assert.match(shiftSource, /scrollLeft <= edge && \(force \|\| scrollDelta < 0\)/);
+  assert.match(shiftSource, /Math\.abs\(scrollLeft - maxScroll \/ 2\)/);
+  const setMonthSource = appSource.slice(appSource.indexOf("function setVisibleMonth"), appSource.indexOf('$("#prevMonth")'));
+  assert.doesNotMatch(setMonthSource, /desiredLeft/);
+  const visibleRowsSource = appSource.slice(appSource.indexOf("function renderVisibleRows"), appSource.indexOf("function queueRowRender"));
+  assert.match(visibleRowsSource, /if \(!force && rangeKey === lastRenderedRowRange\)/);
 });
 
 test("availability timeline uses native two-axis scrolling and lazy edge shifts", () => {
